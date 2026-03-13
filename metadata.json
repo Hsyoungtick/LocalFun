@@ -1,0 +1,5 @@
+{
+  "name": "LocalFun",
+  "description": "A local video sharing community platform featuring video discovery, author profiles, and interactive playback with danmaku.",
+  "requestFramePermissions": []
+}
