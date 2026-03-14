@@ -1,10 +1,11 @@
-import { Link, useParams } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { Link, useParams, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
 import { getVideoDetail, getVideoStreamUrl, getThumbnailUrl, VideoDetail as VideoDetailType } from '../api';
 import CustomVideoPlayer from './CustomVideoPlayer';
 
 export default function VideoDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [video, setVideo] = useState<VideoDetailType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -22,6 +23,31 @@ export default function VideoDetail() {
       })
       .finally(() => setLoading(false));
   }, [id]);
+
+  // 获取当前视频在相关视频列表中的索引
+  const currentIndex = video?.relatedVideos.findIndex(v => v.id === video.id) ?? -1;
+  
+  // 上一个视频（相关视频列表中的前一个，如果没有则取最后一个）
+  const prevVideo = video?.relatedVideos.length 
+    ? video.relatedVideos[currentIndex > 0 ? currentIndex - 1 : video.relatedVideos.length - 1]
+    : null;
+  
+  // 下一个视频（相关视频列表中的后一个，如果没有则取第一个）
+  const nextVideo = video?.relatedVideos.length 
+    ? video.relatedVideos[(currentIndex + 1) % video.relatedVideos.length]
+    : null;
+
+  const handlePrev = useCallback(() => {
+    if (prevVideo) {
+      navigate(`/video/${prevVideo.id}`);
+    }
+  }, [prevVideo, navigate]);
+
+  const handleNext = useCallback(() => {
+    if (nextVideo) {
+      navigate(`/video/${nextVideo.id}`);
+    }
+  }, [nextVideo, navigate]);
 
   if (loading) {
     return (
@@ -50,6 +76,13 @@ export default function VideoDetail() {
             src={getVideoStreamUrl(video.id)}
             poster={video.thumbnail ? getThumbnailUrl(video.thumbnail) : undefined}
             durationSeconds={video.durationSeconds}
+            videoId={video.id}
+            title={video.title}
+            author={video.author?.name}
+            onPrev={handlePrev}
+            onNext={handleNext}
+            hasPrev={!!prevVideo}
+            hasNext={!!nextVideo}
           />
         </div>
 

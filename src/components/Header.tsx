@@ -37,7 +37,7 @@ export default function Header() {
       <div className="flex flex-1 justify-center max-w-xl px-4">
         <div className="relative w-full">
           <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">search</span>
-          <input className="w-full h-10 pl-10 pr-4 rounded-lg bg-slate-100 dark:bg-slate-800 border-none focus:ring-2 focus:ring-primary/50 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 outline-none" placeholder="搜索您的本地收藏..." type="text" />
+          <input className="w-full h-10 pl-10 pr-4 rounded-lg bg-slate-100 dark:bg-slate-800 border-none focus:ring-2 focus:ring-primary/50 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 outline-none" placeholder="搜索" type="text" />
         </div>
       </div>
       <div className="flex items-center gap-4 shrink-0">
