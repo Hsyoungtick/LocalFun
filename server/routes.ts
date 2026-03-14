@@ -283,10 +283,16 @@ router.delete('/videos/:id', (req: Request, res: Response) => {
   }
 });
 
-// 获取分类列表
+// 获取分类列表（只返回有视频的分类）
 router.get('/categories', (req: Request, res: Response) => {
   try {
-    const categories = getDb().prepare('SELECT * FROM categories ORDER BY name').all() as any[];
+    const categories = getDb().prepare(`
+      SELECT c.*, COUNT(v.id) as video_count
+      FROM categories c
+      INNER JOIN videos v ON c.id = v.category_id
+      GROUP BY c.id
+      ORDER BY c.name
+    `).all() as any[];
     
     res.json({
       success: true,
@@ -916,13 +922,7 @@ router.post('/rescan-all', async (req: Request, res: Response) => {
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='categories'");
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='video_paths'");
     
-    // 重新插入默认分类
-    const defaultCategories = ['动画', '电影', '游戏', '音乐', '科技', '纪录片', '美食', '生活', 'Vlog', '其他'];
-    const insertCategory = getDb().prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
-    
-    for (const category of defaultCategories) {
-      insertCategory.run(category);
-    }
+    // 不再插入默认分类，只在扫描视频时根据需要创建分类
     
     console.log('已清空所有表');
 
@@ -990,13 +990,7 @@ router.post('/delete-all', async (req: Request, res: Response) => {
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='categories'");
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='video_paths'");
     
-    // 重新插入默认分类
-    const defaultCategories = ['动画', '电影', '游戏', '音乐', '科技', '纪录片', '美食', '生活', 'Vlog', '其他'];
-    const insertCategory = getDb().prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
-    
-    for (const category of defaultCategories) {
-      insertCategory.run(category);
-    }
+    // 不再插入默认分类，只在扫描视频时根据需要创建分类
     
     console.log('已清空所有表');
 

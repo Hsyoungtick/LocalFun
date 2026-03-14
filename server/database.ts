@@ -83,13 +83,7 @@ export async function initDatabase() {
     )
   `);
 
-  // 插入默认分类
-  const defaultCategories = ['动画', '电影', '游戏', '音乐', '科技', '纪录片', '美食', '生活', 'Vlog', '其他'];
-  const insertCategory = db.prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
-  
-  for (const category of defaultCategories) {
-    insertCategory.run(category);
-  }
+  // 不再插入默认分类，只在扫描视频时根据需要创建分类
 
   console.log('数据库表创建完成');
 }
