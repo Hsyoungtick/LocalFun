@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import db from './database';
+import { getDb } from './database';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts'];
 
@@ -370,7 +370,7 @@ function extractAuthorFromTitle(title: string): { authorName: string | null; cle
 export async function addVideoToDatabase(filePath: string): Promise<number | null> {
   try {
     // 检查是否已存在
-    const existing = db.prepare('SELECT id FROM videos WHERE file_path = ?').get(filePath);
+    const existing = getDb().prepare('SELECT id FROM videos WHERE file_path = ?').get(filePath);
     if (existing) {
       return (existing as any).id;
     }
@@ -403,31 +403,31 @@ export async function addVideoToDatabase(filePath: string): Promise<number | nul
     }
 
     // 获取或创建分类
-    let categoryResult = db.prepare('SELECT id FROM categories WHERE name = ?').get(categoryName);
+    let categoryResult = getDb().prepare('SELECT id FROM categories WHERE name = ?').get(categoryName);
     let categoryId: number;
     
     if (categoryResult) {
       categoryId = (categoryResult as any).id;
     } else {
-      const insertResult = db.prepare('INSERT INTO categories (name) VALUES (?)').run(categoryName);
+      const insertResult = getDb().prepare('INSERT INTO categories (name) VALUES (?)').run(categoryName);
       categoryId = insertResult.lastInsertRowid as number;
     }
 
     // 获取或创建作者
     let authorId: number | null = null;
     if (authorName) {
-      let authorResult = db.prepare('SELECT id FROM authors WHERE name = ?').get(authorName);
+      let authorResult = getDb().prepare('SELECT id FROM authors WHERE name = ?').get(authorName);
       if (authorResult) {
         authorId = (authorResult as any).id;
       } else {
-        const insertAuthor = db.prepare('INSERT INTO authors (name) VALUES (?)').run(authorName);
+        const insertAuthor = getDb().prepare('INSERT INTO authors (name) VALUES (?)').run(authorName);
         authorId = insertAuthor.lastInsertRowid as number;
         console.log(`创建新作者: ${authorName}`);
       }
     }
 
     // 插入视频记录
-    const result = db.prepare(`
+    const result = getDb().prepare(`
       INSERT INTO videos (title, file_path, file_size, duration, width, height, file_modified_at, category_id, author_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(title, filePath, info.size, info.duration, info.width, info.height, fileModifiedAt, categoryId, authorId);
@@ -448,7 +448,7 @@ export async function addVideoToDatabase(filePath: string): Promise<number | nul
 // 为视频生成精灵图
 export async function generateSpriteForVideo(videoId: number): Promise<void> {
   try {
-    const video = db.prepare('SELECT file_path, duration FROM videos WHERE id = ?').get(videoId) as any;
+    const video = getDb().prepare('SELECT file_path, duration FROM videos WHERE id = ?').get(videoId) as any;
     if (video && video.duration > 0) {
       await generateSprite(video.file_path, videoId, video.duration);
     }
@@ -481,7 +481,7 @@ export async function scanAndAddVideos(dirPath: string, updateProgress: boolean 
       scanProgress.message = path.basename(videoPath);
     }
 
-    const existing = db.prepare('SELECT id FROM videos WHERE file_path = ?').get(videoPath);
+    const existing = getDb().prepare('SELECT id FROM videos WHERE file_path = ?').get(videoPath);
     if (existing) {
       skipped++;
       continue;
@@ -501,7 +501,7 @@ export async function scanAndAddVideos(dirPath: string, updateProgress: boolean 
 
 // 刷新所有已配置路径的视频（带进度更新）
 export async function refreshAllVideos(): Promise<{ added: number; total: number }> {
-  const paths = db.prepare('SELECT path FROM video_paths WHERE enabled = 1').all() as { path: string }[];
+  const paths = getDb().prepare('SELECT path FROM video_paths WHERE enabled = 1').all() as { path: string }[];
   let totalAdded = 0;
   let totalVideos = 0;
   const allVideoIds: number[] = [];
@@ -543,7 +543,7 @@ export async function refreshAllVideos(): Promise<{ added: number; total: number
 
     for (let i = 0; i < allVideoIds.length; i++) {
       scanProgress.current = i + 1;
-      const video = db.prepare('SELECT file_path FROM videos WHERE id = ?').get(allVideoIds[i]) as any;
+      const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(allVideoIds[i]) as any;
       if (video) {
         scanProgress.currentFile = path.basename(video.file_path);
         scanProgress.message = path.basename(video.file_path);
@@ -557,7 +557,7 @@ export async function refreshAllVideos(): Promise<{ added: number; total: number
   scanProgress.message = '';
 
   // 获取总视频数
-  const count = db.prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };
+  const count = getDb().prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };
   
   return { added: totalAdded, total: count.count };
 }

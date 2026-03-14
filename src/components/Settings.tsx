@@ -158,7 +158,7 @@ export default function Settings() {
   }, [pathProgress]);
 
   // 开始轮询进度
-  const startProgressPolling = (pathId?: number) => {
+  const startProgressPolling = (pathId?: number, isGlobal?: boolean) => {
     if (progressInterval.current) {
       clearInterval(progressInterval.current);
     }
@@ -166,7 +166,20 @@ export default function Settings() {
       try {
         const p = await getScanProgress();
         
-        if (pathId !== undefined) {
+        if (isGlobal) {
+          // 全局操作：更新所有路径的进度
+          const allProgress: Record<number, PathProgress> = {};
+          paths.forEach(pathItem => {
+            allProgress[pathItem.id] = {
+              status: p.status,
+              current: p.current,
+              total: p.total,
+              phase: p.phase,
+              videoCount: p.videoCount
+            };
+          });
+          setPathProgress(allProgress);
+        } else if (pathId !== undefined) {
           // 单路径进度
           setPathProgress(prev => ({
             ...prev,
@@ -178,16 +191,6 @@ export default function Settings() {
               videoCount: p.videoCount
             }
           }));
-        } else {
-          // 全局进度
-          setGlobalProgress({
-            status: p.status,
-            current: p.current,
-            total: p.total,
-            phase: p.phase,
-            videoCount: p.videoCount,
-            importingPath: null
-          });
         }
         
         if (p.status === 'completed' || p.status === 'error') {
@@ -266,7 +269,7 @@ export default function Settings() {
     setError(null);
     setSuccess(null);
     
-    // 初始化该路径的进度
+    // 初始化路径进度
     setPathProgress(prev => ({
       ...prev,
       [pathId]: { status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0 }
@@ -301,7 +304,7 @@ export default function Settings() {
     setError(null);
     setSuccess(null);
     
-    // 初始化该路径的进度
+    // 初始化路径进度
     setPathProgress(prev => ({
       ...prev,
       [pathId]: { status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0 }
@@ -337,17 +340,40 @@ export default function Settings() {
     setError(null);
     setSuccess(null);
     
-    // 初始化全局进度
-    setGlobalProgress({ status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0, importingPath: null });
+    // 初始化所有路径的进度
+    const initialProgress: Record<number, PathProgress> = {};
+    paths.forEach(p => {
+      initialProgress[p.id] = { status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0 };
+    });
+    setPathProgress(initialProgress);
     
-    startProgressPolling();
+    startProgressPolling(undefined, true);
     
     try {
       const result = await scanVideos();
       setImportResult(result);
       loadStats();
+      
+      // 更新所有路径的最终状态
+      const finalProgress: Record<number, PathProgress> = {};
+      paths.forEach(p => {
+        finalProgress[p.id] = { 
+          status: 'completed', 
+          current: result.added, 
+          total: result.added, 
+          phase: `已完成（${result.added} 个视频）`, 
+          videoCount: result.added 
+        };
+      });
+      setPathProgress(finalProgress);
     } catch (e: any) {
       setError(e.message);
+      // 更新所有路径的错误状态
+      const errorProgress: Record<number, PathProgress> = {};
+      paths.forEach(p => {
+        errorProgress[p.id] = { status: 'error', current: 0, total: 0, phase: '导入失败', videoCount: 0 };
+      });
+      setPathProgress(errorProgress);
     } finally {
       setImporting(false);
       stopProgressPolling();
@@ -361,18 +387,41 @@ export default function Settings() {
     setError(null);
     setSuccess(null);
     
-    // 初始化全局进度
-    setGlobalProgress({ status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0, importingPath: null });
+    // 初始化所有路径的进度
+    const initialProgress: Record<number, PathProgress> = {};
+    paths.forEach(p => {
+      initialProgress[p.id] = { status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0 };
+    });
+    setPathProgress(initialProgress);
     
-    startProgressPolling();
+    startProgressPolling(undefined, true);
     
     try {
       const result = await rescanAll();
       setImportResult(result);
       loadStats();
       loadPaths();
+      
+      // 更新所有路径的最终状态
+      const finalProgress: Record<number, PathProgress> = {};
+      paths.forEach(p => {
+        finalProgress[p.id] = { 
+          status: 'completed', 
+          current: result.added, 
+          total: result.added, 
+          phase: `已完成（${result.added} 个视频）`, 
+          videoCount: result.added 
+        };
+      });
+      setPathProgress(finalProgress);
     } catch (e: any) {
       setError(e.message);
+      // 更新所有路径的错误状态
+      const errorProgress: Record<number, PathProgress> = {};
+      paths.forEach(p => {
+        errorProgress[p.id] = { status: 'error', current: 0, total: 0, phase: '导入失败', videoCount: 0 };
+      });
+      setPathProgress(errorProgress);
     } finally {
       setImporting(false);
       stopProgressPolling();
@@ -398,32 +447,6 @@ export default function Settings() {
     } finally {
       setImporting(false);
     }
-  };
-
-  // 渲染进度条
-  const renderProgressBar = (progress: { status: string; current: number; total: number; phase: string }) => {
-    if (progress.status === 'idle') return null;
-    
-    const isCompleted = progress.status === 'completed';
-    const percentage = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
-    
-    return (
-      <div className="flex items-center gap-3 flex-1">
-        <div className="flex-1">
-          {!isCompleted && (
-            <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
-              <div 
-                className="bg-primary h-2 rounded-full transition-all duration-300"
-                style={{ width: `${percentage}%` }}
-              />
-            </div>
-          )}
-        </div>
-        <span className={`text-xs whitespace-nowrap ${isCompleted ? 'text-green-600 dark:text-green-400' : 'text-slate-500'}`}>
-          {progress.phase}
-        </span>
-      </div>
-    );
   };
 
   // 检查是否有任何路径正在导入
@@ -481,20 +504,41 @@ export default function Settings() {
         {paths.length > 0 ? (
           <div className="space-y-2">
             {paths.map((p) => {
-              const progress = pathProgress[p.id];
-              const isThisImporting = progress && progress.status !== 'idle' && progress.status !== 'completed' && progress.status !== 'error';
+              const progress = pathProgress[p.id] || { status: 'idle', current: 0, total: 0, phase: '', videoCount: 0 };
+              const isThisImporting = progress.status !== 'idle' && progress.status !== 'completed' && progress.status !== 'error';
               
               return (
-                <div key={p.id} className="flex items-center justify-between bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
-                  <div className="flex-1 min-w-0 mr-4">
+                <div key={p.id} className="flex items-center bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
+                  <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{p.path}</div>
                     <div className="text-xs text-slate-500">{p.enabled ? '已启用' : '已禁用'}</div>
-                    {progress && renderProgressBar(progress)}
                   </div>
+                  
+                  {/* 路径进度条 */}
+                  <div className="flex-1 mx-4">
+                    {progress.status !== 'idle' && (
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          {progress.status !== 'completed' && (
+                            <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
+                              <div 
+                                className="bg-primary h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                        <span className={`text-xs whitespace-nowrap ${progress.status === 'completed' ? 'text-green-600 dark:text-green-400' : 'text-slate-500'}`}>
+                          {progress.phase}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  
                   <div className="flex gap-2 flex-shrink-0">
                     <button
                       onClick={() => handleImport(p.id, p.path)}
-                      disabled={importing || isAnyPathImporting}
+                      disabled={importing || isAnyPathImporting || isThisImporting}
                       className="h-8 px-3 bg-primary/10 text-primary rounded text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-50"
                       title="只导入新视频"
                     >
@@ -502,8 +546,8 @@ export default function Settings() {
                     </button>
                     <button
                       onClick={() => handleReimport(p.id, p.path)}
-                      disabled={importing || isAnyPathImporting}
-                      className="h-8 px-3 bg-orange-100 text-orange-600 rounded text-xs font-medium hover:bg-orange-200 transition-colors disabled:opacity-50"
+                      disabled={importing || isAnyPathImporting || isThisImporting}
+                      className="h-8 px-3 bg-orange-100 text-orange-600 rounded text-xs font-medium hover:bg-orange-20 transition-colors disabled:opacity-50"
                       title="删除该目录数据并重新导入"
                     >
                       重新导入
@@ -511,7 +555,7 @@ export default function Settings() {
                     <button
                       onClick={() => handleDeletePath(p.id)}
                       disabled={isThisImporting}
-                      className="h-8 px-3 bg-red-100 text-red-600 rounded text-xs font-medium hover:bg-red-200 transition-colors disabled:opacity-50"
+                      className="h-8 px-3 bg-red-100 text-red-600 rounded text-xs font-medium hover:bg-red-20 transition-colors disabled:opacity-50"
                       title="删除路径及该路径下的所有视频数据"
                     >
                       删除
@@ -528,26 +572,7 @@ export default function Settings() {
         )}
 
         {/* 全部操作按钮 */}
-        <div className="flex justify-end gap-3 mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
-          {/* 全局进度显示 */}
-          {globalProgress.status !== 'idle' && (
-            <div className="flex items-center gap-3 flex-1">
-              <div className="flex-1">
-                {globalProgress.status !== 'completed' && (
-                  <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
-                    <div 
-                      className="bg-primary h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${globalProgress.total > 0 ? (globalProgress.current / globalProgress.total) * 100 : 0}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-              <span className={`text-xs whitespace-nowrap ${globalProgress.status === 'completed' ? 'text-green-600 dark:text-green-400' : 'text-slate-500'}`}>
-                {globalProgress.phase}
-              </span>
-            </div>
-          )}
-          
+        <div className="flex items-center justify-end gap-3 mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
           <button
             onClick={handleImportAll}
             disabled={importing || isAnyPathImporting || paths.length === 0}

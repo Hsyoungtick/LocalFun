@@ -22,20 +22,18 @@ if (!fs.existsSync(previewsDir)) {
   fs.mkdirSync(previewsDir, { recursive: true });
 }
 
-// 内部数据库实例
-let _db = new Database(dbPath);
+// 获取当前数据库实例
+export function getDb(): Database.Database {
+  return db;
+}
 
-// 使用 Proxy 确保始终使用最新的数据库实例
-const db = new Proxy({} as Database.Database, {
-  get(_, prop) {
-    return Reflect.get(_db, prop);
-  }
-});
+// 内部数据库实例
+let db: Database.Database = new Database(dbPath);
 
 // 初始化数据库表
 export async function initDatabase() {
   // 创建作者表
-  _db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS authors (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
@@ -46,7 +44,7 @@ export async function initDatabase() {
   `);
 
   // 创建分类表
-  _db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS categories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
@@ -55,7 +53,7 @@ export async function initDatabase() {
   `);
 
   // 创建视频表
-  _db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS videos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
@@ -76,7 +74,7 @@ export async function initDatabase() {
   `);
 
   // 创建视频路径配置表
-  _db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS video_paths (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       path TEXT NOT NULL UNIQUE,
@@ -87,7 +85,7 @@ export async function initDatabase() {
 
   // 插入默认分类
   const defaultCategories = ['动画', '电影', '游戏', '音乐', '科技', '纪录片', '美食', '生活', 'Vlog', '其他'];
-  const insertCategory = _db.prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
+  const insertCategory = db.prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
   
   for (const category of defaultCategories) {
     insertCategory.run(category);
@@ -99,11 +97,11 @@ export async function initDatabase() {
 // 重新加载数据库（删除后重新创建）
 export function reloadDatabase(): void {
   try {
-    _db.close();
+    db.close();
   } catch (e) {
     // 忽略关闭错误
   }
-  _db = new Database(dbPath);
+  db = new Database(dbPath);
 }
 
 export default db;

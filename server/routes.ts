@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import db, { initDatabase, dbPath, reloadDatabase } from './database';
+import db, { initDatabase, dbPath, reloadDatabase, getDb } from './database';
 import { addVideoToDatabase, refreshAllVideos, scanAndAddVideos, scanProgress, generateSpriteForVideo } from './scanner';
 import fs from 'fs';
 import path from 'path';
@@ -94,7 +94,7 @@ router.get('/videos', (req: Request, res: Response) => {
     sql += ' LIMIT ? OFFSET ?';
     params.push(Number(limit), offset);
 
-    const videos = db.prepare(sql).all(...params) as any[];
+    const videos = getDb().prepare(sql).all(...params) as any[];
 
     // 获取总数
     let countSql = `
@@ -115,7 +115,7 @@ router.get('/videos', (req: Request, res: Response) => {
       countParams.push(`%${search}%`);
     }
 
-    const { total } = db.prepare(countSql).get(...countParams) as { total: number };
+    const { total } = getDb().prepare(countSql).get(...countParams) as { total: number };
 
     // 格式化返回数据
     const formattedVideos = videos.map(v => ({
@@ -155,7 +155,7 @@ router.get('/videos/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
-    const video = db.prepare(`
+    const video = getDb().prepare(`
       SELECT v.*, a.name as author_name, a.avatar as author_avatar, a.description as author_description, c.name as category_name
       FROM videos v
       LEFT JOIN authors a ON v.author_id = a.id
@@ -168,11 +168,11 @@ router.get('/videos/:id', (req: Request, res: Response) => {
     }
 
     // 增加观看次数
-    db.prepare('UPDATE videos SET view_count = view_count + 1 WHERE id = ?').run(id);
+    getDb().prepare('UPDATE videos SET view_count = view_count + 1 WHERE id = ?').run(id);
 
     // 获取作者的其他视频
     const relatedVideos = video.author_id ? 
-      db.prepare(`
+      getDb().prepare(`
         SELECT id, title, duration, view_count
         FROM videos
         WHERE author_id = ? AND id != ?
@@ -246,7 +246,7 @@ router.put('/videos/:id', (req: Request, res: Response) => {
     }
 
     params.push(id);
-    db.prepare(`UPDATE videos SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    getDb().prepare(`UPDATE videos SET ${updates.join(', ')} WHERE id = ?`).run(...params);
 
     res.json({ success: true, message: '更新成功' });
   } catch (error) {
@@ -274,7 +274,7 @@ router.delete('/videos/:id', (req: Request, res: Response) => {
       fs.unlinkSync(spritePath);
     }
     
-    db.prepare('DELETE FROM videos WHERE id = ?').run(id);
+    getDb().prepare('DELETE FROM videos WHERE id = ?').run(id);
     
     res.json({ success: true, message: '删除成功' });
   } catch (error) {
@@ -286,7 +286,7 @@ router.delete('/videos/:id', (req: Request, res: Response) => {
 // 获取分类列表
 router.get('/categories', (req: Request, res: Response) => {
   try {
-    const categories = db.prepare('SELECT * FROM categories ORDER BY name').all() as any[];
+    const categories = getDb().prepare('SELECT * FROM categories ORDER BY name').all() as any[];
     
     res.json({
       success: true,
@@ -304,7 +304,7 @@ router.get('/categories', (req: Request, res: Response) => {
 // 获取作者列表
 router.get('/authors', (req: Request, res: Response) => {
   try {
-    const authors = db.prepare(`
+    const authors = getDb().prepare(`
       SELECT a.*, COUNT(v.id) as video_count
       FROM authors a
       LEFT JOIN videos v ON a.id = v.author_id
@@ -333,14 +333,14 @@ router.get('/authors/:name', (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     
-    const author = db.prepare('SELECT * FROM authors WHERE name = ?').get(name) as any;
+    const author = getDb().prepare('SELECT * FROM authors WHERE name = ?').get(name) as any;
     
     if (!author) {
       return res.status(404).json({ success: false, error: '作者不存在' });
     }
 
     // 获取作者的视频
-    const videos = db.prepare(`
+    const videos = getDb().prepare(`
       SELECT id, title, duration, view_count, file_modified_at, created_at
       FROM videos
       WHERE author_id = ?
@@ -348,7 +348,7 @@ router.get('/authors/:name', (req: Request, res: Response) => {
     `).all(author.id) as any[];
 
     // 统计数据
-    const stats = db.prepare(`
+    const stats = getDb().prepare(`
       SELECT 
         COUNT(*) as total_videos,
         SUM(view_count) as total_views
@@ -389,7 +389,7 @@ router.post('/authors', (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '作者名称不能为空' });
     }
 
-    const result = db.prepare('INSERT INTO authors (name, avatar, description) VALUES (?, ?, ?)').run(name, avatar, description);
+    const result = getDb().prepare('INSERT INTO authors (name, avatar, description) VALUES (?, ?, ?)').run(name, avatar, description);
     
     res.json({
       success: true,
@@ -436,7 +436,7 @@ router.put('/authors/:id', (req: Request, res: Response) => {
     }
 
     params.push(id);
-    db.prepare(`UPDATE authors SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    getDb().prepare(`UPDATE authors SET ${updates.join(', ')} WHERE id = ?`).run(...params);
 
     res.json({ success: true, message: '更新成功' });
   } catch (error: any) {
@@ -451,7 +451,7 @@ router.put('/authors/:id', (req: Request, res: Response) => {
 // 视频路径管理
 router.get('/paths', (req: Request, res: Response) => {
   try {
-    const paths = db.prepare('SELECT * FROM video_paths ORDER BY created_at DESC').all() as any[];
+    const paths = getDb().prepare('SELECT * FROM video_paths ORDER BY created_at DESC').all() as any[];
     
     res.json({
       success: true,
@@ -482,7 +482,7 @@ router.post('/paths', (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '路径不存在' });
     }
 
-    const result = db.prepare('INSERT INTO video_paths (path) VALUES (?)').run(videoPath);
+    const result = getDb().prepare('INSERT INTO video_paths (path) VALUES (?)').run(videoPath);
     
     res.json({
       success: true,
@@ -507,7 +507,7 @@ router.delete('/paths/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     
     // 获取路径信息
-    const pathInfo = db.prepare('SELECT path FROM video_paths WHERE id = ?').get(id) as any;
+    const pathInfo = getDb().prepare('SELECT path FROM video_paths WHERE id = ?').get(id) as any;
     if (!pathInfo) {
       return res.status(404).json({ success: false, error: '路径不存在' });
     }
@@ -516,7 +516,7 @@ router.delete('/paths/:id', (req: Request, res: Response) => {
     const normalizedPath = pathValue.replace(/\\/g, '/');
     
     // 获取该路径下的所有视频ID
-    const videos = db.prepare(`
+    const videos = getDb().prepare(`
       SELECT id FROM videos 
       WHERE file_path LIKE ? OR file_path LIKE ?
     `).all(`${normalizedPath}%`, `${pathValue}%`) as any[];
@@ -543,12 +543,28 @@ router.delete('/paths/:id', (req: Request, res: Response) => {
     }
     
     // 删除该路径的视频数据
-    db.prepare(`
+    getDb().prepare(`
       DELETE FROM videos WHERE file_path LIKE ? OR file_path LIKE ?
     `).run(`${normalizedPath}%`, `${pathValue}%`);
     
     // 删除路径配置
-    db.prepare('DELETE FROM video_paths WHERE id = ?').run(id);
+    getDb().prepare('DELETE FROM video_paths WHERE id = ?').run(id);
+    
+    // 检查并重置自增计数器
+    const videoCount = getDb().prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };
+    if (videoCount.count === 0) {
+      getDb().exec("DELETE FROM sqlite_sequence WHERE name='videos'");
+    }
+    
+    const authorCount = getDb().prepare('SELECT COUNT(*) as count FROM authors').get() as { count: number };
+    if (authorCount.count === 0) {
+      getDb().exec("DELETE FROM sqlite_sequence WHERE name='authors'");
+    }
+    
+    const pathCount = getDb().prepare('SELECT COUNT(*) as count FROM video_paths').get() as { count: number };
+    if (pathCount.count === 0) {
+      getDb().exec("DELETE FROM sqlite_sequence WHERE name='video_paths'");
+    }
     
     res.json({ 
       success: true, 
@@ -593,7 +609,7 @@ router.post('/scan', async (req: Request, res: Response) => {
         
         for (let i = 0; i < result.videoIds.length; i++) {
           scanProgress.current = i + 1;
-          const video = db.prepare('SELECT file_path FROM videos WHERE id = ?').get(result.videoIds[i]) as any;
+          const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(result.videoIds[i]) as any;
           if (video) {
             scanProgress.currentFile = path.basename(video.file_path);
             scanProgress.message = `正在生成预览图: ${path.basename(video.file_path)}`;
@@ -638,7 +654,7 @@ router.post('/rescan', async (req: Request, res: Response) => {
     const normalizedPath = scanPath.replace(/\\/g, '/');
 
     // 获取该路径下的所有视频文件（同时匹配正斜杠和反斜杠格式）
-    const videos = db.prepare(`
+    const videos = getDb().prepare(`
       SELECT id, file_path FROM videos 
       WHERE file_path LIKE ? OR file_path LIKE ?
     `).all(`${normalizedPath}%`, `${scanPath}%`) as any[];
@@ -675,8 +691,19 @@ router.post('/rescan', async (req: Request, res: Response) => {
     }
 
     // 从数据库删除这些视频（同时匹配正斜杠和反斜杠格式）
-    db.prepare(`DELETE FROM videos WHERE file_path LIKE ? OR file_path LIKE ?`).run(`${normalizedPath}%`, `${scanPath}%`);
+    getDb().prepare(`DELETE FROM videos WHERE file_path LIKE ? OR file_path LIKE ?`).run(`${normalizedPath}%`, `${scanPath}%`);
     console.log(`已从数据库删除 ${videos.length} 个视频记录`);
+    
+    // 检查并重置自增计数器
+    const videoCount = getDb().prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };
+    if (videoCount.count === 0) {
+      getDb().exec("DELETE FROM sqlite_sequence WHERE name='videos'");
+    }
+    
+    const authorCount = getDb().prepare('SELECT COUNT(*) as count FROM authors').get() as { count: number };
+    if (authorCount.count === 0) {
+      getDb().exec("DELETE FROM sqlite_sequence WHERE name='authors'");
+    }
 
     // 重新扫描该路径
     const result = await scanAndAddVideos(scanPath, true);
@@ -689,7 +716,7 @@ router.post('/rescan', async (req: Request, res: Response) => {
       
       for (let i = 0; i < result.videoIds.length; i++) {
         scanProgress.current = i + 1;
-        const video = db.prepare('SELECT file_path FROM videos WHERE id = ?').get(result.videoIds[i]) as any;
+        const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(result.videoIds[i]) as any;
         if (video) {
           scanProgress.currentFile = path.basename(video.file_path);
           scanProgress.message = `正在生成预览图: ${path.basename(video.file_path)}`;
@@ -716,7 +743,7 @@ router.get('/stream/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
-    const video = db.prepare('SELECT file_path FROM videos WHERE id = ?').get(id) as any;
+    const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(id) as any;
     
     if (!video) {
       return res.status(404).json({ success: false, error: '视频不存在' });
@@ -767,10 +794,10 @@ router.get('/stream/:id', (req: Request, res: Response) => {
 // 获取统计信息
 router.get('/stats', (req: Request, res: Response) => {
   try {
-    const videoCount = db.prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };
-    const authorCount = db.prepare('SELECT COUNT(*) as count FROM authors').get() as { count: number };
-    const totalViews = db.prepare('SELECT SUM(view_count) as total FROM videos').get() as { total: number };
-    const totalSize = db.prepare('SELECT SUM(file_size) as total FROM videos').get() as { total: number };
+    const videoCount = getDb().prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };
+    const authorCount = getDb().prepare('SELECT COUNT(*) as count FROM authors').get() as { count: number };
+    const totalViews = getDb().prepare('SELECT SUM(view_count) as total FROM videos').get() as { total: number };
+    const totalSize = getDb().prepare('SELECT SUM(file_size) as total FROM videos').get() as { total: number };
     
     res.json({
       success: true,
@@ -813,7 +840,7 @@ router.post('/clear-cache', async (req: Request, res: Response) => {
     }
 
     // 保存视频路径配置
-    const videoPaths = db.prepare('SELECT path, enabled FROM video_paths').all() as any[];
+    const videoPaths = getDb().prepare('SELECT path, enabled FROM video_paths').all() as any[];
 
     // 删除数据库文件
     if (fs.existsSync(dbPath)) {
@@ -828,7 +855,7 @@ router.post('/clear-cache', async (req: Request, res: Response) => {
 
     // 恢复视频路径配置
     if (videoPaths.length > 0) {
-      const insertPath = db.prepare('INSERT INTO video_paths (path, enabled) VALUES (?, ?)');
+      const insertPath = getDb().prepare('INSERT INTO video_paths (path, enabled) VALUES (?, ?)');
       for (const vp of videoPaths) {
         try {
           insertPath.run(vp.path, vp.enabled);
@@ -849,7 +876,7 @@ router.post('/clear-cache', async (req: Request, res: Response) => {
   }
 });
 
-// 全部重新扫描（删除数据库文件并重新生成，保留视频路径配置，然后扫描）
+// 全部重新扫描（清空所有表，保留视频路径配置，然后扫描）
 router.post('/rescan-all', async (req: Request, res: Response) => {
   try {
     // 删除所有封面图片
@@ -875,22 +902,33 @@ router.post('/rescan-all', async (req: Request, res: Response) => {
     }
 
     // 保存视频路径配置
-    const videoPaths = db.prepare('SELECT path, enabled FROM video_paths').all() as any[];
+    const videoPaths = getDb().prepare('SELECT path, enabled FROM video_paths').all() as any[];
 
-    // 删除数据库文件
-    if (fs.existsSync(dbPath)) {
-      fs.unlinkSync(dbPath);
-      console.log('已删除数据库文件');
+    // 清空所有表（不删除数据库文件）
+    getDb().exec('DELETE FROM videos');
+    getDb().exec('DELETE FROM authors');
+    getDb().exec('DELETE FROM categories');
+    getDb().exec('DELETE FROM video_paths');
+    
+    // 重置自增计数器
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='videos'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='authors'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='categories'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='video_paths'");
+    
+    // 重新插入默认分类
+    const defaultCategories = ['动画', '电影', '游戏', '音乐', '科技', '纪录片', '美食', '生活', 'Vlog', '其他'];
+    const insertCategory = getDb().prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
+    
+    for (const category of defaultCategories) {
+      insertCategory.run(category);
     }
-
-    // 重新加载数据库连接并初始化
-    reloadDatabase();
-    await initDatabase();
-    console.log('已重新创建数据库');
+    
+    console.log('已清空所有表');
 
     // 恢复视频路径配置
     if (videoPaths.length > 0) {
-      const insertPath = db.prepare('INSERT INTO video_paths (path, enabled) VALUES (?, ?)');
+      const insertPath = getDb().prepare('INSERT INTO video_paths (path, enabled) VALUES (?, ?)');
       for (const vp of videoPaths) {
         try {
           insertPath.run(vp.path, vp.enabled);
@@ -915,7 +953,7 @@ router.post('/rescan-all', async (req: Request, res: Response) => {
   }
 });
 
-// 全部删除（删除数据库文件和所有数据，包括路径配置）
+// 全部删除（清空所有表，包括路径配置）
 router.post('/delete-all', async (req: Request, res: Response) => {
   try {
     // 删除所有封面图片
@@ -940,20 +978,31 @@ router.post('/delete-all', async (req: Request, res: Response) => {
       }
     }
 
-    // 删除数据库文件
-    if (fs.existsSync(dbPath)) {
-      fs.unlinkSync(dbPath);
-      console.log('已删除数据库文件');
+    // 清空所有表（不删除数据库文件）
+    getDb().exec('DELETE FROM videos');
+    getDb().exec('DELETE FROM authors');
+    getDb().exec('DELETE FROM categories');
+    getDb().exec('DELETE FROM video_paths');
+    
+    // 重置自增计数器
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='videos'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='authors'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='categories'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='video_paths'");
+    
+    // 重新插入默认分类
+    const defaultCategories = ['动画', '电影', '游戏', '音乐', '科技', '纪录片', '美食', '生活', 'Vlog', '其他'];
+    const insertCategory = getDb().prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
+    
+    for (const category of defaultCategories) {
+      insertCategory.run(category);
     }
-
-    // 重新加载数据库连接并初始化
-    reloadDatabase();
-    await initDatabase();
-    console.log('已重新创建数据库');
+    
+    console.log('已清空所有表');
 
     res.json({
       success: true,
-      message: '所有数据已删除，数据库已重新生成'
+      message: '所有数据已删除'
     });
   } catch (error) {
     console.error('全部删除失败:', error);
