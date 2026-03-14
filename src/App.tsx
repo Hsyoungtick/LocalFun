@@ -9,6 +9,7 @@ import Footer from './components/Footer';
 import Home from './components/Home';
 import Profile from './components/Profile';
 import VideoDetail from './components/VideoDetail';
+import Settings from './components/Settings';
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/author/:username" element={<Profile />} />
           <Route path="/video/:id" element={<VideoDetail />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
         <Footer />
       </div>
