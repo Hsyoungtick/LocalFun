@@ -74,24 +74,17 @@ export default function VideoDetail() {
         {/* 左侧：视频信息 */}
         <div className="w-full md:w-3/4 flex flex-col gap-1">
           <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">{video.title}</h1>
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400 flex-wrap">
-              <span className="flex items-center gap-1">
-                <span className="material-symbols-outlined text-base">visibility</span> {video.views}次观看
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="material-symbols-outlined text-base">calendar_today</span> {video.time}
-              </span>
-            </div>
-            <div className="flex items-center gap-4 text-xs text-slate-400">
-              <span>文件大小: {video.fileSize}</span>
-              {video.width && video.height && (
-                <span>分辨率: {video.width}x{video.height}</span>
-              )}
-              <span className="flex items-center gap-1">
-                <span className="material-symbols-outlined text-base">movie</span> #{video.category}
-              </span>
-            </div>
+          <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400 flex-wrap">
+            <span className="flex items-center gap-1">
+              <span className="material-symbols-outlined text-base">visibility</span> {video.views}次观看
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="material-symbols-outlined text-base">calendar_today</span> {video.time}
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="material-symbols-outlined text-base">movie</span> #{video.category}
+            </span>
+            <span>文件大小: {video.fileSize}</span>
           </div>
         </div>
 
