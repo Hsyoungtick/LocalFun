@@ -1,13 +1,13 @@
 import { Link, useParams } from 'react-router-dom';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { getVideoDetail, getVideoStreamUrl, getThumbnailUrl, VideoDetail as VideoDetailType } from '../api';
+import CustomVideoPlayer from './CustomVideoPlayer';
 
 export default function VideoDetail() {
   const { id } = useParams();
   const [video, setVideo] = useState<VideoDetailType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -42,20 +42,15 @@ export default function VideoDetail() {
   }
 
   return (
-    <main className="flex-1 flex flex-col lg:flex-row gap-6 px-4 lg:px-20 py-6 max-w-[1600px] mx-auto w-full">
-      <div className="flex-1 flex flex-col gap-4">
+    <main className="flex-1 flex flex-col md:flex-row gap-6 px-4 md:px-20 py-6 max-w-[1600px] mx-auto w-full">
+      <div className="w-full md:w-3/4 flex flex-col gap-4">
         {/* 视频播放器 */}
         <div className="relative group rounded-xl overflow-hidden bg-black aspect-video shadow-2xl">
-          <video
-            ref={videoRef}
-            className="w-full h-full object-contain"
-            controls
-            autoPlay
+          <CustomVideoPlayer
+            src={getVideoStreamUrl(video.id)}
             poster={video.thumbnail ? getThumbnailUrl(video.thumbnail) : undefined}
-          >
-            <source src={getVideoStreamUrl(video.id)} type="video/mp4" />
-            您的浏览器不支持视频播放
-          </video>
+            durationSeconds={video.durationSeconds}
+          />
         </div>
 
         {/* 视频信息 */}
@@ -123,7 +118,7 @@ export default function VideoDetail() {
       </div>
 
       {/* 侧边栏 - 相关视频 */}
-      <aside className="w-full lg:w-[400px] flex flex-col gap-6">
+      <aside className="w-full md:w-1/4 flex flex-col gap-6">
         <div className="flex flex-col gap-4">
           <h3 className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <span className="material-symbols-outlined text-primary">auto_awesome</span> 相关视频
