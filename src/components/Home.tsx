@@ -89,7 +89,7 @@ export default function Home() {
             onChange={(e) => setSortBy(e.target.value)}
             className="h-9 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm border-none outline-none"
           >
-            <option value="created_at">添加时间</option>
+            <option value="created_at">修改时间</option>
             <option value="views">播放量</option>
             <option value="duration">时长</option>
             <option value="size">大小</option>
@@ -129,42 +129,25 @@ export default function Home() {
               <div className="relative overflow-hidden rounded-xl aspect-video bg-slate-200 dark:bg-slate-700">
                 <VideoPreview
                   videoId={video.id}
-                  thumbnail={video.thumbnail}
                   duration={video.durationSeconds}
                   title={video.title}
+                  views={video.views}
                 />
-                <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[10px] font-bold px-1.5 py-0.5 rounded leading-none pointer-events-none">
-                  {video.duration}
-                </div>
               </div>
-              <div className="flex gap-3">
-                <Link
-                  onClick={(e) => e.stopPropagation()}
-                  to={`/author/${video.author}`}
-                  className="w-9 h-9 shrink-0 rounded-full bg-slate-200 dark:bg-slate-700 mt-1 flex items-center justify-center overflow-hidden"
-                >
-                  {video.authorAvatar ? (
-                    <img src={video.authorAvatar} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="material-symbols-outlined text-slate-400">person</span>
-                  )}
-                </Link>
-                <div className="flex flex-col min-w-0">
-                  <h3 className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 group-hover:text-primary transition-colors">
-                    {video.title}
-                  </h3>
+              <div className="flex flex-col min-w-0">
+                <h3 className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 group-hover:text-primary transition-colors">
+                  {video.title}
+                </h3>
+                <div className="text-slate-500 dark:text-slate-400 text-xs mt-1 flex items-center gap-1 flex-wrap">
                   <Link
                     onClick={(e) => e.stopPropagation()}
                     to={`/author/${video.author}`}
-                    className="text-slate-500 dark:text-slate-400 text-xs mt-1.5 flex items-center gap-1 hover:text-primary transition-colors"
+                    className="hover:text-primary transition-colors"
                   >
-                    <span>{video.author}</span>
+                    {video.author}
                   </Link>
-                  <div className="text-slate-400 text-[11px] mt-0.5 flex items-center gap-2">
-                    <span>{video.views}次观看</span>
-                    <span>•</span>
-                    <span>{video.time}</span>
-                  </div>
+                  <span>·</span>
+                  <span>{video.time}</span>
                 </div>
               </div>
             </div>

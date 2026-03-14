@@ -94,16 +94,11 @@ export default function Profile() {
             {author.videos.map((video) => (
               <Link to={`/video/${video.id}`} key={video.id} className="group flex flex-col gap-3 cursor-pointer">
                 <div className="relative aspect-video rounded-lg overflow-hidden bg-slate-200 dark:bg-slate-700">
-                  {video.thumbnail ? (
-                    <div 
-                      className="w-full h-full bg-center bg-no-repeat bg-cover group-hover:scale-110 transition-transform duration-300" 
-                      style={{ backgroundImage: `url(${getThumbnailUrl(video.thumbnail)})` }}
-                    ></div>
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <span className="material-symbols-outlined text-4xl text-slate-400">video_file</span>
-                    </div>
-                  )}
+                  <img 
+                    src={getThumbnailUrl(video.id)}
+                    alt={video.title}
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                  />
                   <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
                     {video.duration}
                   </div>

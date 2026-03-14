@@ -6,7 +6,6 @@ export interface Video {
   title: string;
   duration: string;
   durationSeconds: number;
-  thumbnail: string | null;
   author: string;
   authorAvatar?: string;
   views: string;
@@ -24,7 +23,6 @@ export interface VideoDetail {
   description?: string;
   duration: string;
   durationSeconds: number;
-  thumbnail: string | null;
   filePath: string;
   fileSize: string;
   width?: number;
@@ -42,7 +40,6 @@ export interface VideoDetail {
     id: number;
     title: string;
     duration: string;
-    thumbnail: string | null;
     views: string;
   }[];
 }
@@ -59,7 +56,6 @@ export interface Author {
     id: number;
     title: string;
     duration: string;
-    thumbnail: string | null;
     views: string;
     time: string;
   }[];
@@ -264,14 +260,13 @@ export function getVideoStreamUrl(id: number): string {
   return `${API_BASE}/stream/${id}`;
 }
 
-// 获取封面URL
-export function getThumbnailUrl(thumbnail: string | null): string {
-  if (!thumbnail) return '';
-  if (thumbnail.startsWith('http')) return thumbnail;
-  return `http://localhost:3001${thumbnail}`;
+// 获取封面URL（根据videoId生成）
+export function getThumbnailUrl(videoId: number | null): string {
+  if (!videoId) return '';
+  return `http://localhost:3001/covers/${videoId}.jpg`;
 }
 
-// 清除缓存
+// 清除缓存（保留路径配置）
 export async function clearCache(): Promise<void> {
   const response = await fetch(`${API_BASE}/clear-cache`, {
     method: 'POST'
@@ -279,4 +274,43 @@ export async function clearCache(): Promise<void> {
   const data = await response.json();
   
   if (!data.success) throw new Error(data.error);
+}
+
+// 全部重新扫描（删除数据库并重新生成，保留路径配置，然后扫描）
+export async function rescanAll(): Promise<{ added: number; total: number }> {
+  const response = await fetch(`${API_BASE}/rescan-all`, {
+    method: 'POST'
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 全部删除（删除数据库和所有数据，包括路径配置）
+export async function deleteAll(): Promise<void> {
+  const response = await fetch(`${API_BASE}/delete-all`, {
+    method: 'POST'
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 获取扫描进度
+export async function getScanProgress(): Promise<{
+  status: 'idle' | 'scanning' | 'generating_covers' | 'generating_previews' | 'completed' | 'error';
+  current: number;
+  total: number;
+  currentFile: string;
+  message: string;
+  startTime: number;
+  phase: string;
+  videoCount: number;
+}> {
+  const response = await fetch(`${API_BASE}/scan-progress`);
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
 }

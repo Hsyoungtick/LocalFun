@@ -64,7 +64,7 @@ export default function VideoDetail() {
     );
   }
 
-  const authorName = video.author?.name || '未知';
+  const authorName = video.author?.name || '未知作者';
   const authorAvatar = video.author?.avatar;
   const authorDescription = video.author?.description;
 
@@ -127,7 +127,7 @@ export default function VideoDetail() {
           <div className="relative group rounded-xl overflow-hidden bg-black aspect-video shadow-2xl">
             <CustomVideoPlayer
               src={getVideoStreamUrl(video.id)}
-              poster={video.thumbnail ? getThumbnailUrl(video.thumbnail) : undefined}
+              poster={getThumbnailUrl(video.id)}
               durationSeconds={video.durationSeconds}
               videoId={video.id}
               title={video.title}
@@ -161,17 +161,11 @@ export default function VideoDetail() {
               {video.relatedVideos.map((relatedVideo) => (
                 <Link to={`/video/${relatedVideo.id}`} key={relatedVideo.id} className="flex gap-3 group cursor-pointer">
                   <div className="relative w-40 h-24 shrink-0 rounded-lg overflow-hidden bg-slate-200 dark:bg-slate-700">
-                    {relatedVideo.thumbnail ? (
-                      <img 
-                        alt={relatedVideo.title} 
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform" 
-                        src={getThumbnailUrl(relatedVideo.thumbnail)} 
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <span className="material-symbols-outlined text-slate-400">video_file</span>
-                      </div>
-                    )}
+                    <img 
+                      alt={relatedVideo.title} 
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform" 
+                      src={getThumbnailUrl(relatedVideo.id)} 
+                    />
                     <span className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] px-1 rounded">
                       {relatedVideo.duration}
                     </span>

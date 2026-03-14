@@ -5,6 +5,29 @@ import db from './database';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts'];
 
+// 扫描进度状态
+export interface ScanProgress {
+  status: 'idle' | 'scanning' | 'generating_covers' | 'generating_previews' | 'completed' | 'error';
+  current: number;
+  total: number;
+  currentFile: string;
+  message: string;
+  startTime: number;
+  phase: string; // 当前阶段描述
+  videoCount: number; // 已导入的视频数
+}
+
+export const scanProgress: ScanProgress = {
+  status: 'idle',
+  current: 0,
+  total: 0,
+  currentFile: '',
+  message: '',
+  startTime: 0,
+  phase: '',
+  videoCount: 0
+};
+
 // 获取数据目录路径
 const dataDir = path.join(process.cwd(), 'data');
 const coversDir = path.join(dataDir, 'covers');
@@ -205,10 +228,10 @@ export async function generateSprite(filePath: string, videoId: number, duration
   ensureDirs();
 
   const spritePath = path.join(previewsDir, `${videoId}_sprite.jpg`);
-  const frameCount = 50;
+  const frameCount = 30;
   const frameWidth = 320;
   const frameHeight = 180;
-  const cols = 10; // 每行10帧
+  const cols = 6; // 每行6帧
   const rows = 5;  // 5行
 
   // 并行提取50帧，每帧使用快速seek
@@ -328,6 +351,21 @@ export async function scanDirectory(dirPath: string): Promise<string[]> {
   return videos;
 }
 
+// 从标题开头提取作者名（【作者名】格式）
+function extractAuthorFromTitle(title: string): { authorName: string | null; cleanTitle: string } {
+  const match = title.match(/^【(.+?)】(.*)$/);
+  if (match) {
+    return {
+      authorName: match[1].trim(),
+      cleanTitle: match[2].trim() || title
+    };
+  }
+  return {
+    authorName: null,
+    cleanTitle: title
+  };
+}
+
 // 添加视频到数据库（只生成封面）
 export async function addVideoToDatabase(filePath: string): Promise<number | null> {
   try {
@@ -349,7 +387,11 @@ export async function addVideoToDatabase(filePath: string): Promise<number | nul
     const fileModifiedAt = stats.mtime.toISOString();
 
     // 从文件名提取标题
-    const title = path.basename(filePath, path.extname(filePath));
+    const fileName = path.basename(filePath, path.extname(filePath));
+    
+    // 从标题提取作者名
+    const { authorName, cleanTitle } = extractAuthorFromTitle(fileName);
+    const title = cleanTitle;
 
     // 从文件路径提取直接父目录名作为分类
     // 例如: E:\Video\subfolder\video.mp4 -> subfolder
@@ -371,21 +413,31 @@ export async function addVideoToDatabase(filePath: string): Promise<number | nul
       categoryId = insertResult.lastInsertRowid as number;
     }
 
+    // 获取或创建作者
+    let authorId: number | null = null;
+    if (authorName) {
+      let authorResult = db.prepare('SELECT id FROM authors WHERE name = ?').get(authorName);
+      if (authorResult) {
+        authorId = (authorResult as any).id;
+      } else {
+        const insertAuthor = db.prepare('INSERT INTO authors (name) VALUES (?)').run(authorName);
+        authorId = insertAuthor.lastInsertRowid as number;
+        console.log(`创建新作者: ${authorName}`);
+      }
+    }
+
     // 插入视频记录
     const result = db.prepare(`
-      INSERT INTO videos (title, file_path, file_size, duration, width, height, file_modified_at, category_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(title, filePath, info.size, info.duration, info.width, info.height, fileModifiedAt, categoryId);
+      INSERT INTO videos (title, file_path, file_size, duration, width, height, file_modified_at, category_id, author_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(title, filePath, info.size, info.duration, info.width, info.height, fileModifiedAt, categoryId, authorId);
 
     const videoId = result.lastInsertRowid as number;
 
-    // 生成封面
-    const thumbnail = await generateThumbnail(filePath, videoId, info.duration);
-    if (thumbnail) {
-      db.prepare('UPDATE videos SET thumbnail = ? WHERE id = ?').run(thumbnail, videoId);
-    }
+    // 生成封面（不需要更新数据库，封面路径由 videoId 决定）
+    await generateThumbnail(filePath, videoId, info.duration);
 
-    console.log(`添加视频: ${title} (ID: ${videoId}, 分类: ${categoryName})`);
+    console.log(`添加视频: ${title} (ID: ${videoId}, 分类: ${categoryName}, 作者: ${authorName || '未知'})`);
     return videoId;
   } catch (e) {
     console.error(`添加视频失败: ${filePath}`, e);
@@ -405,15 +457,30 @@ export async function generateSpriteForVideo(videoId: number): Promise<void> {
   }
 }
 
-// 扫描并添加所有视频
-export async function scanAndAddVideos(dirPath: string): Promise<{ added: number; skipped: number; failed: number; videoIds: number[] }> {
+// 扫描并添加所有视频（带进度更新）
+export async function scanAndAddVideos(dirPath: string, updateProgress: boolean = false): Promise<{ added: number; skipped: number; failed: number; videoIds: number[] }> {
   const videos = await scanDirectory(dirPath);
   let added = 0;
   let skipped = 0;
   let failed = 0;
   const videoIds: number[] = [];
 
-  for (const videoPath of videos) {
+  if (updateProgress) {
+    scanProgress.total = videos.length;
+    scanProgress.status = 'scanning';
+    scanProgress.phase = '扫描视频文件...';
+    scanProgress.startTime = Date.now();
+  }
+
+  for (let i = 0; i < videos.length; i++) {
+    const videoPath = videos[i];
+    
+    if (updateProgress) {
+      scanProgress.current = i + 1;
+      scanProgress.currentFile = path.basename(videoPath);
+      scanProgress.message = path.basename(videoPath);
+    }
+
     const existing = db.prepare('SELECT id FROM videos WHERE file_path = ?').get(videoPath);
     if (existing) {
       skipped++;
@@ -432,29 +499,62 @@ export async function scanAndAddVideos(dirPath: string): Promise<{ added: number
   return { added, skipped, failed, videoIds };
 }
 
-// 刷新所有已配置路径的视频
+// 刷新所有已配置路径的视频（带进度更新）
 export async function refreshAllVideos(): Promise<{ added: number; total: number }> {
   const paths = db.prepare('SELECT path FROM video_paths WHERE enabled = 1').all() as { path: string }[];
   let totalAdded = 0;
   let totalVideos = 0;
   const allVideoIds: number[] = [];
 
+  // 计算总视频数
+  let totalFiles = 0;
+  for (const { path: dirPath } of paths) {
+    if (fs.existsSync(dirPath)) {
+      const videos = await scanDirectory(dirPath);
+      totalFiles += videos.length;
+    }
+  }
+
+  scanProgress.total = totalFiles;
+  scanProgress.current = 0;
+  scanProgress.status = 'scanning';
+  scanProgress.phase = '扫描视频文件...';
+  scanProgress.message = '';
+  scanProgress.startTime = Date.now();
+  scanProgress.videoCount = 0;
+
   // 第一阶段：扫描所有路径，生成封面
   for (const { path: dirPath } of paths) {
     if (fs.existsSync(dirPath)) {
-      const result = await scanAndAddVideos(dirPath);
+      const result = await scanAndAddVideos(dirPath, true);
       totalAdded += result.added;
       totalVideos += result.added + result.skipped;
       allVideoIds.push(...result.videoIds);
+      scanProgress.videoCount += result.added;
     }
   }
 
   // 第二阶段：生成所有精灵图
-  console.log(`开始生成精灵图，共 ${allVideoIds.length} 个视频...`);
-  for (const videoId of allVideoIds) {
-    await generateSpriteForVideo(videoId);
+  if (allVideoIds.length > 0) {
+    scanProgress.status = 'generating_previews';
+    scanProgress.phase = '生成精灵图...';
+    scanProgress.total = allVideoIds.length;
+    scanProgress.current = 0;
+
+    for (let i = 0; i < allVideoIds.length; i++) {
+      scanProgress.current = i + 1;
+      const video = db.prepare('SELECT file_path FROM videos WHERE id = ?').get(allVideoIds[i]) as any;
+      if (video) {
+        scanProgress.currentFile = path.basename(video.file_path);
+        scanProgress.message = path.basename(video.file_path);
+      }
+      await generateSpriteForVideo(allVideoIds[i]);
+    }
   }
-  console.log('精灵图生成完成');
+
+  scanProgress.status = 'completed';
+  scanProgress.phase = `已完成（${scanProgress.videoCount} 个视频）`;
+  scanProgress.message = '';
 
   // 获取总视频数
   const count = db.prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
-import db from './database';
-import { addVideoToDatabase, refreshAllVideos, scanAndAddVideos } from './scanner';
+import db, { initDatabase, dbPath, reloadDatabase } from './database';
+import { addVideoToDatabase, refreshAllVideos, scanAndAddVideos, scanProgress, generateSpriteForVideo } from './scanner';
 import fs from 'fs';
 import path from 'path';
 
@@ -26,22 +26,19 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
-// 格式化时间
-function formatTimeAgo(dateStr: string): string {
+// 格式化时间为具体日期
+function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
-  const diff = now.getTime() - date.getTime();
+  const year = date.getFullYear();
+  const currentYear = now.getFullYear();
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
   
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-  
-  if (minutes < 1) return '刚刚';
-  if (minutes < 60) return `${minutes}分钟前`;
-  if (hours < 24) return `${hours}小时前`;
-  if (days < 30) return `${days}天前`;
-  if (days < 365) return `${Math.floor(days / 30)}个月前`;
-  return `${Math.floor(days / 365)}年前`;
+  if (year === currentYear) {
+    return `${month}-${day}`;
+  }
+  return `${year}-${month}-${day}`;
 }
 
 // 格式化观看次数
@@ -88,7 +85,7 @@ router.get('/videos', (req: Request, res: Response) => {
     const sortField = sort === 'views' ? 'v.view_count' : 
                       sort === 'duration' ? 'v.duration' :
                       sort === 'size' ? 'v.file_size' :
-                      'v.created_at';
+                      'v.file_modified_at';
     const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
     sql += ` ORDER BY ${sortField} ${sortOrder}`;
 
@@ -126,12 +123,11 @@ router.get('/videos', (req: Request, res: Response) => {
       title: v.title,
       duration: formatDuration(v.duration || 0),
       durationSeconds: v.duration,
-      thumbnail: v.thumbnail || null,
       author: v.author_name || '未知作者',
       authorAvatar: v.author_avatar,
       views: formatViews(v.view_count || 0),
       viewsCount: v.view_count || 0,
-      time: formatTimeAgo(v.created_at),
+      time: formatDate(v.file_modified_at || v.created_at),
       fileSize: formatFileSize(v.file_size || 0),
       category: v.category_name || '其他',
       width: v.width,
@@ -177,7 +173,7 @@ router.get('/videos/:id', (req: Request, res: Response) => {
     // 获取作者的其他视频
     const relatedVideos = video.author_id ? 
       db.prepare(`
-        SELECT id, title, duration, thumbnail, view_count
+        SELECT id, title, duration, view_count
         FROM videos
         WHERE author_id = ? AND id != ?
         ORDER BY view_count DESC
@@ -192,14 +188,13 @@ router.get('/videos/:id', (req: Request, res: Response) => {
         description: video.description,
         duration: formatDuration(video.duration || 0),
         durationSeconds: video.duration,
-        thumbnail: video.thumbnail,
         filePath: video.file_path,
         fileSize: formatFileSize(video.file_size || 0),
         width: video.width,
         height: video.height,
         views: formatViews(video.view_count || 0),
         viewsCount: video.view_count || 0,
-        time: formatTimeAgo(video.created_at),
+        time: formatDate(video.file_modified_at || video.created_at),
         category: video.category_name || '其他',
         author: video.author_name ? {
           name: video.author_name,
@@ -210,7 +205,6 @@ router.get('/videos/:id', (req: Request, res: Response) => {
           id: v.id,
           title: v.title,
           duration: formatDuration(v.duration || 0),
-          thumbnail: v.thumbnail,
           views: formatViews(v.view_count || 0)
         }))
       }
@@ -266,14 +260,18 @@ router.delete('/videos/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
-    // 获取视频信息以删除封面
-    const video = db.prepare('SELECT thumbnail FROM videos WHERE id = ?').get(id) as any;
+    // 删除封面和精灵图
+    const coversDir = path.join(process.cwd(), 'data', 'covers');
+    const previewsDir = path.join(process.cwd(), 'data', 'previews');
     
-    if (video && video.thumbnail) {
-      const thumbnailPath = path.join(process.cwd(), 'data', video.thumbnail.replace('/covers/', 'covers/'));
-      if (fs.existsSync(thumbnailPath)) {
-        fs.unlinkSync(thumbnailPath);
-      }
+    const coverPath = path.join(coversDir, `${id}.jpg`);
+    if (fs.existsSync(coverPath)) {
+      fs.unlinkSync(coverPath);
+    }
+    
+    const spritePath = path.join(previewsDir, `${id}_sprite.jpg`);
+    if (fs.existsSync(spritePath)) {
+      fs.unlinkSync(spritePath);
     }
     
     db.prepare('DELETE FROM videos WHERE id = ?').run(id);
@@ -343,10 +341,10 @@ router.get('/authors/:name', (req: Request, res: Response) => {
 
     // 获取作者的视频
     const videos = db.prepare(`
-      SELECT id, title, duration, thumbnail, view_count, created_at
+      SELECT id, title, duration, view_count, file_modified_at, created_at
       FROM videos
       WHERE author_id = ?
-      ORDER BY created_at DESC
+      ORDER BY file_modified_at DESC
     `).all(author.id) as any[];
 
     // 统计数据
@@ -371,9 +369,8 @@ router.get('/authors/:name', (req: Request, res: Response) => {
           id: v.id,
           title: v.title,
           duration: formatDuration(v.duration || 0),
-          thumbnail: v.thumbnail,
           views: formatViews(v.view_count || 0),
-          time: formatTimeAgo(v.created_at)
+          time: formatDate(v.file_modified_at || v.created_at)
         }))
       }
     });
@@ -504,27 +501,109 @@ router.post('/paths', (req: Request, res: Response) => {
   }
 });
 
-// 删除视频路径
+// 删除视频路径（同时删除该路径的视频数据和封面/精灵图）
 router.delete('/paths/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    
+    // 获取路径信息
+    const pathInfo = db.prepare('SELECT path FROM video_paths WHERE id = ?').get(id) as any;
+    if (!pathInfo) {
+      return res.status(404).json({ success: false, error: '路径不存在' });
+    }
+    
+    const pathValue = pathInfo.path;
+    const normalizedPath = pathValue.replace(/\\/g, '/');
+    
+    // 获取该路径下的所有视频ID
+    const videos = db.prepare(`
+      SELECT id FROM videos 
+      WHERE file_path LIKE ? OR file_path LIKE ?
+    `).all(`${normalizedPath}%`, `${pathValue}%`) as any[];
+    
+    // 删除封面和精灵图
+    const coversDir = path.join(process.cwd(), 'data', 'covers');
+    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    
+    for (const video of videos) {
+      const coverPath = path.join(coversDir, `${video.id}.jpg`);
+      if (fs.existsSync(coverPath)) {
+        fs.unlinkSync(coverPath);
+      }
+      
+      const spritePath = path.join(previewsDir, `${video.id}_sprite.jpg`);
+      if (fs.existsSync(spritePath)) {
+        fs.unlinkSync(spritePath);
+      }
+      
+      const timestampPath = path.join(previewsDir, `${video.id}_timestamps.txt`);
+      if (fs.existsSync(timestampPath)) {
+        fs.unlinkSync(timestampPath);
+      }
+    }
+    
+    // 删除该路径的视频数据
+    db.prepare(`
+      DELETE FROM videos WHERE file_path LIKE ? OR file_path LIKE ?
+    `).run(`${normalizedPath}%`, `${pathValue}%`);
+    
+    // 删除路径配置
     db.prepare('DELETE FROM video_paths WHERE id = ?').run(id);
-    res.json({ success: true, message: '删除成功' });
+    
+    res.json({ 
+      success: true, 
+      message: '删除成功',
+      deletedVideos: videos.length
+    });
   } catch (error) {
     console.error('删除路径失败:', error);
     res.status(500).json({ success: false, error: '删除路径失败' });
   }
 });
 
-// 扫描视频
+// 获取扫描进度
+router.get('/scan-progress', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: scanProgress
+  });
+});
+
+// 扫描视频（只添加新视频）
 router.post('/scan', async (req: Request, res: Response) => {
   try {
+    // 检查数据库是否存在，不存在则初始化
+    if (!fs.existsSync(dbPath)) {
+      console.log('数据库不存在，正在初始化...');
+      await initDatabase();
+    }
+    
     const { path: scanPath } = req.body;
     
     let result;
     if (scanPath) {
-      // 扫描指定路径
-      result = await scanAndAddVideos(scanPath);
+      // 扫描指定路径（只添加新视频）
+      result = await scanAndAddVideos(scanPath, true);
+      
+      // 生成精灵图
+      if (result.videoIds.length > 0) {
+        scanProgress.status = 'generating_previews';
+        scanProgress.total = result.videoIds.length;
+        scanProgress.message = '正在生成预览图...';
+        
+        for (let i = 0; i < result.videoIds.length; i++) {
+          scanProgress.current = i + 1;
+          const video = db.prepare('SELECT file_path FROM videos WHERE id = ?').get(result.videoIds[i]) as any;
+          if (video) {
+            scanProgress.currentFile = path.basename(video.file_path);
+            scanProgress.message = `正在生成预览图: ${path.basename(video.file_path)}`;
+          }
+          await generateSpriteForVideo(result.videoIds[i]);
+        }
+      }
+      
+      scanProgress.status = 'completed';
+      scanProgress.message = '扫描完成';
     } else {
       // 扫描所有已配置的路径
       result = await refreshAllVideos();
@@ -543,39 +622,84 @@ router.post('/scan', async (req: Request, res: Response) => {
 // 重新扫描指定路径（清除该路径的缓存后重新扫描）
 router.post('/rescan', async (req: Request, res: Response) => {
   try {
+    // 检查数据库是否存在，不存在则初始化
+    if (!fs.existsSync(dbPath)) {
+      console.log('数据库不存在，正在初始化...');
+      await initDatabase();
+    }
+    
     const { path: scanPath } = req.body;
     
     if (!scanPath) {
       return res.status(400).json({ success: false, error: '路径不能为空' });
     }
 
-    // 获取该路径下的所有视频文件
-    const videos = db.prepare('SELECT id, file_path FROM videos WHERE file_path LIKE ?')
-      .all(`${scanPath.replace(/\\/g, '/')}%`) as any[];
+    // 标准化路径（统一使用正斜杠）
+    const normalizedPath = scanPath.replace(/\\/g, '/');
+
+    // 获取该路径下的所有视频文件（同时匹配正斜杠和反斜杠格式）
+    const videos = db.prepare(`
+      SELECT id, file_path FROM videos 
+      WHERE file_path LIKE ? OR file_path LIKE ?
+    `).all(`${normalizedPath}%`, `${scanPath}%`) as any[];
+
+    console.log(`重新扫描路径: ${scanPath}（标准化: ${normalizedPath}），找到 ${videos.length} 个视频需要删除`);
 
     // 删除这些视频的封面和精灵图
     const coversDir = path.join(process.cwd(), 'data', 'covers');
     const previewsDir = path.join(process.cwd(), 'data', 'previews');
 
     for (const video of videos) {
+      console.log(`处理视频: ID=${video.id}, 路径=${video.file_path}`);
       // 删除封面
       const coverPath = path.join(coversDir, `${video.id}.jpg`);
       if (fs.existsSync(coverPath)) {
         fs.unlinkSync(coverPath);
+        console.log(`删除封面: ${coverPath}`);
       }
       // 删除精灵图
       const spritePath = path.join(previewsDir, `${video.id}_sprite.jpg`);
       if (fs.existsSync(spritePath)) {
         fs.unlinkSync(spritePath);
+        console.log(`删除精灵图: ${spritePath}`);
+      }
+      // 删除临时文件
+      try {
+        const tempFiles = fs.readdirSync(previewsDir).filter(f => f.startsWith(`${video.id}_temp`));
+        for (const tempFile of tempFiles) {
+          fs.unlinkSync(path.join(previewsDir, tempFile));
+        }
+      } catch (e) {
+        // 忽略错误
       }
     }
 
-    // 从数据库删除这些视频
-    const pathPattern = scanPath.replace(/\\/g, '/');
-    db.prepare('DELETE FROM videos WHERE file_path LIKE ?').run(`${pathPattern}%`);
+    // 从数据库删除这些视频（同时匹配正斜杠和反斜杠格式）
+    db.prepare(`DELETE FROM videos WHERE file_path LIKE ? OR file_path LIKE ?`).run(`${normalizedPath}%`, `${scanPath}%`);
+    console.log(`已从数据库删除 ${videos.length} 个视频记录`);
 
     // 重新扫描该路径
-    const result = await scanAndAddVideos(scanPath);
+    const result = await scanAndAddVideos(scanPath, true);
+    
+    // 生成精灵图
+    if (result.videoIds.length > 0) {
+      scanProgress.status = 'generating_previews';
+      scanProgress.total = result.videoIds.length;
+      scanProgress.message = '正在生成预览图...';
+      
+      for (let i = 0; i < result.videoIds.length; i++) {
+        scanProgress.current = i + 1;
+        const video = db.prepare('SELECT file_path FROM videos WHERE id = ?').get(result.videoIds[i]) as any;
+        if (video) {
+          scanProgress.currentFile = path.basename(video.file_path);
+          scanProgress.message = `正在生成预览图: ${path.basename(video.file_path)}`;
+        }
+        await generateSpriteForVideo(result.videoIds[i]);
+      }
+    }
+    
+    scanProgress.status = 'completed';
+    scanProgress.message = '扫描完成';
     
     res.json({
       success: true,
@@ -663,8 +787,8 @@ router.get('/stats', (req: Request, res: Response) => {
   }
 });
 
-// 清除所有缓存（数据库和封面，但保留视频路径）
-router.post('/clear-cache', (req: Request, res: Response) => {
+// 清除所有缓存（删除数据库文件并重新生成，保留视频路径配置）
+router.post('/clear-cache', async (req: Request, res: Response) => {
   try {
     // 删除所有封面图片
     const coversDir = path.join(process.cwd(), 'data', 'covers');
@@ -688,21 +812,152 @@ router.post('/clear-cache', (req: Request, res: Response) => {
       }
     }
 
-    // 清空数据库表（保留 video_paths）
-    db.prepare('DELETE FROM videos').run();
-    db.prepare('DELETE FROM authors').run();
-    db.prepare('DELETE FROM categories').run();
-    
-    // 重置自增ID（保留 video_paths）
-    db.prepare("DELETE FROM sqlite_sequence WHERE name IN ('videos', 'authors', 'categories')").run();
+    // 保存视频路径配置
+    const videoPaths = db.prepare('SELECT path, enabled FROM video_paths').all() as any[];
+
+    // 删除数据库文件
+    if (fs.existsSync(dbPath)) {
+      fs.unlinkSync(dbPath);
+      console.log('已删除数据库文件');
+    }
+
+    // 重新加载数据库连接并初始化
+    reloadDatabase();
+    await initDatabase();
+    console.log('已重新创建数据库');
+
+    // 恢复视频路径配置
+    if (videoPaths.length > 0) {
+      const insertPath = db.prepare('INSERT INTO video_paths (path, enabled) VALUES (?, ?)');
+      for (const vp of videoPaths) {
+        try {
+          insertPath.run(vp.path, vp.enabled);
+        } catch (e) {
+          // 忽略重复错误
+        }
+      }
+      console.log(`已恢复 ${videoPaths.length} 个视频路径配置`);
+    }
 
     res.json({
       success: true,
-      message: '缓存已清除'
+      message: '缓存已清除，数据库已重新生成'
     });
   } catch (error) {
     console.error('清除缓存失败:', error);
     res.status(500).json({ success: false, error: '清除缓存失败' });
+  }
+});
+
+// 全部重新扫描（删除数据库文件并重新生成，保留视频路径配置，然后扫描）
+router.post('/rescan-all', async (req: Request, res: Response) => {
+  try {
+    // 删除所有封面图片
+    const coversDir = path.join(process.cwd(), 'data', 'covers');
+    if (fs.existsSync(coversDir)) {
+      const files = fs.readdirSync(coversDir);
+      for (const file of files) {
+        if (file.endsWith('.jpg')) {
+          fs.unlinkSync(path.join(coversDir, file));
+        }
+      }
+    }
+
+    // 删除所有预览精灵图
+    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    if (fs.existsSync(previewsDir)) {
+      const files = fs.readdirSync(previewsDir);
+      for (const file of files) {
+        if (file.endsWith('.jpg') || file.endsWith('.txt')) {
+          fs.unlinkSync(path.join(previewsDir, file));
+        }
+      }
+    }
+
+    // 保存视频路径配置
+    const videoPaths = db.prepare('SELECT path, enabled FROM video_paths').all() as any[];
+
+    // 删除数据库文件
+    if (fs.existsSync(dbPath)) {
+      fs.unlinkSync(dbPath);
+      console.log('已删除数据库文件');
+    }
+
+    // 重新加载数据库连接并初始化
+    reloadDatabase();
+    await initDatabase();
+    console.log('已重新创建数据库');
+
+    // 恢复视频路径配置
+    if (videoPaths.length > 0) {
+      const insertPath = db.prepare('INSERT INTO video_paths (path, enabled) VALUES (?, ?)');
+      for (const vp of videoPaths) {
+        try {
+          insertPath.run(vp.path, vp.enabled);
+        } catch (e) {
+          // 忽略重复错误
+        }
+      }
+      console.log(`已恢复 ${videoPaths.length} 个视频路径配置`);
+    }
+
+    // 扫描所有路径
+    const result = await refreshAllVideos();
+
+    res.json({
+      success: true,
+      message: '数据库已重新生成并扫描完成',
+      data: result
+    });
+  } catch (error) {
+    console.error('全部重新扫描失败:', error);
+    res.status(500).json({ success: false, error: '全部重新扫描失败' });
+  }
+});
+
+// 全部删除（删除数据库文件和所有数据，包括路径配置）
+router.post('/delete-all', async (req: Request, res: Response) => {
+  try {
+    // 删除所有封面图片
+    const coversDir = path.join(process.cwd(), 'data', 'covers');
+    if (fs.existsSync(coversDir)) {
+      const files = fs.readdirSync(coversDir);
+      for (const file of files) {
+        if (file.endsWith('.jpg')) {
+          fs.unlinkSync(path.join(coversDir, file));
+        }
+      }
+    }
+
+    // 删除所有预览精灵图
+    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    if (fs.existsSync(previewsDir)) {
+      const files = fs.readdirSync(previewsDir);
+      for (const file of files) {
+        if (file.endsWith('.jpg') || file.endsWith('.txt')) {
+          fs.unlinkSync(path.join(previewsDir, file));
+        }
+      }
+    }
+
+    // 删除数据库文件
+    if (fs.existsSync(dbPath)) {
+      fs.unlinkSync(dbPath);
+      console.log('已删除数据库文件');
+    }
+
+    // 重新加载数据库连接并初始化
+    reloadDatabase();
+    await initDatabase();
+    console.log('已重新创建数据库');
+
+    res.json({
+      success: true,
+      message: '所有数据已删除，数据库已重新生成'
+    });
+  } catch (error) {
+    console.error('全部删除失败:', error);
+    res.status(500).json({ success: false, error: '全部删除失败' });
   }
 });
 
