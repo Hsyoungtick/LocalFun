@@ -1,5 +1,5 @@
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useState, useEffect, FormEvent } from 'react';
+import React, { useState, useEffect, FormEvent } from 'react';
 import { getVideos, getCategories, Video, Category, renameVideo } from '../api';
 import VideoPreview from './VideoPreview';
 import ContextMenu from './ContextMenu';
@@ -13,7 +13,7 @@ export default function Home() {
   const [selectedCategory, setSelectedCategory] = useState('全部');
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('created_at');
+  const [sortBy, setSortBy] = useState('random');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -171,10 +171,13 @@ export default function Home() {
             onChange={(e) => setSortBy(e.target.value)}
             className="h-9 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm border-none outline-none"
           >
+            <option value="random">随机</option>
             <option value="created_at">修改时间</option>
             <option value="views">播放量</option>
             <option value="duration">时长</option>
             <option value="size">大小</option>
+            <option value="author">作者</option>
+            <option value="category">类别</option>
           </select>
           <button
             onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
@@ -218,7 +221,7 @@ export default function Home() {
               </div>
               <div className="flex flex-col min-w-0">
                 <h3 
-                  className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 group-hover:text-primary transition-colors cursor-context-menu"
+                  className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 hover:text-primary transition-colors cursor-context-menu"
                   onContextMenu={(e) => handleTitleContextMenu(e, video)}
                 >
                   {video.title}
@@ -234,6 +237,8 @@ export default function Home() {
                   </Link>
                   <span>·</span>
                   <span>{video.time}</span>
+                  <span>·</span>
+                  <span>#{video.category}</span>
                 </div>
               </div>
             </div>

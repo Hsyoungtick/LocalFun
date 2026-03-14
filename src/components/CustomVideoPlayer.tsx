@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, MouseEvent, ChangeEvent } from 'react';
+import { useState, useRef, useEffect, MouseEvent, ChangeEvent, forwardRef, useImperativeHandle } from 'react';
 
 interface CustomVideoPlayerProps {
   src: string;
@@ -13,7 +13,11 @@ interface CustomVideoPlayerProps {
   hasNext?: boolean;
 }
 
-export default function CustomVideoPlayer({ 
+export interface CustomVideoPlayerRef {
+  getCurrentTime: () => number;
+}
+
+const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProps>(({ 
   src, 
   poster, 
   durationSeconds, 
@@ -24,7 +28,10 @@ export default function CustomVideoPlayer({
   onNext,
   hasPrev = false,
   hasNext = false
-}: CustomVideoPlayerProps) {
+}, ref) => {
+  useImperativeHandle(ref, () => ({
+    getCurrentTime: () => currentTime
+  }));
   const videoRef = useRef<HTMLVideoElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -94,6 +101,18 @@ export default function CustomVideoPlayer({
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    const handleSeekTo = (e: Event) => {
+      const customEvent = e as CustomEvent<number>;
+      const video = videoRef.current;
+      if (video) {
+        video.currentTime = customEvent.detail;
+      }
+    };
+    window.addEventListener('seekTo', handleSeekTo);
+    return () => window.removeEventListener('seekTo', handleSeekTo);
   }, []);
 
   // 显示音量指示器
@@ -508,4 +527,6 @@ export default function CustomVideoPlayer({
       )}
     </div>
   );
-}
+});
+
+export default CustomVideoPlayer;

@@ -34,6 +34,14 @@ export interface VideoDetail {
     name: string;
     description?: string;
   };
+  likeCount: number;
+  isFavorite: boolean;
+  favoriteFramesCount: number;
+  favoriteFrames: {
+    id: number;
+    timeSeconds: number;
+    note?: string;
+  }[];
   relatedVideos: {
     id: number;
     title: string;
@@ -340,4 +348,89 @@ export async function renameAuthor(id: number, newName: string): Promise<string>
   
   if (!data.success) throw new Error(data.error);
   return data.message;
+}
+
+// 获取同类别视频
+export async function getSameCategoryVideos(
+  id: number, 
+  params?: { sort?: string; order?: string; limit?: number }
+): Promise<Video[]> {
+  const searchParams = new URLSearchParams();
+  if (params?.sort) searchParams.set('sort', params.sort);
+  if (params?.order) searchParams.set('order', params.order);
+  if (params?.limit) searchParams.set('limit', params.limit.toString());
+
+  const response = await fetch(`${API_BASE}/videos/${id}/same-category?${searchParams}`);
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 添加喜欢帧
+export async function addFavoriteFrame(id: number, timeSeconds: number, note?: string): Promise<{ id: number }> {
+  const response = await fetch(`${API_BASE}/videos/${id}/favorite-frames`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ timeSeconds, note })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 更新喜欢帧注释
+export async function updateFavoriteFrameNote(id: number, frameId: number, note?: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${id}/favorite-frames/${frameId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 删除喜欢帧
+export async function deleteFavoriteFrame(id: number, frameId: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${id}/favorite-frames/${frameId}`, {
+    method: 'DELETE'
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 重置视频数据
+export async function resetVideoData(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${id}/reset`, {
+    method: 'POST'
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 点赞
+export async function likeVideo(id: number): Promise<{ likeCount: number }> {
+  const response = await fetch(`${API_BASE}/videos/${id}/like`, {
+    method: 'POST'
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 切换收藏
+export async function toggleFavorite(id: number, isFavorite: boolean): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${id}/favorite`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ isFavorite })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
 }

@@ -66,10 +66,24 @@ export async function initDatabase() {
       category_id INTEGER,
       description TEXT,
       view_count INTEGER DEFAULT 0,
+      like_count INTEGER DEFAULT 0,
+      is_favorite INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       file_modified_at DATETIME,
       FOREIGN KEY (author_id) REFERENCES authors(id),
       FOREIGN KEY (category_id) REFERENCES categories(id)
+    )
+  `);
+
+  // 创建喜欢帧表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS favorite_frames (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id INTEGER NOT NULL,
+      time_seconds REAL NOT NULL,
+      note TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (video_id) REFERENCES videos(id)
     )
   `);
 
@@ -84,6 +98,23 @@ export async function initDatabase() {
   `);
 
   // 不再插入默认分类，只在扫描视频时根据需要创建分类
+
+  // 更新现有表结构（向后兼容）
+  try {
+    db.prepare('ALTER TABLE videos ADD COLUMN like_count INTEGER DEFAULT 0').run();
+  } catch (e) {
+    // 列已存在，忽略错误
+  }
+  try {
+    db.prepare('ALTER TABLE videos ADD COLUMN is_favorite INTEGER DEFAULT 0').run();
+  } catch (e) {
+    // 列已存在，忽略错误
+  }
+  try {
+    db.prepare('ALTER TABLE favorite_frames ADD COLUMN note TEXT').run();
+  } catch (e) {
+    // 列已存在，忽略错误
+  }
 
   console.log('数据库表创建完成');
 }

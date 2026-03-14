@@ -82,12 +82,20 @@ router.get('/videos', (req: Request, res: Response) => {
     }
 
     // 排序
-    const sortField = sort === 'views' ? 'v.view_count' : 
-                      sort === 'duration' ? 'v.duration' :
-                      sort === 'size' ? 'v.file_size' :
-                      'v.file_modified_at';
-    const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
-    sql += ` ORDER BY ${sortField} ${sortOrder}`;
+    let orderClause = '';
+    if (sort === 'random') {
+      orderClause = ' ORDER BY RANDOM()';
+    } else {
+      const sortField = sort === 'views' ? 'v.view_count' : 
+                        sort === 'duration' ? 'v.duration' :
+                        sort === 'size' ? 'v.file_size' :
+                        sort === 'author' ? 'a.name' :
+                        sort === 'category' ? 'c.name' :
+                        'v.file_modified_at';
+      const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
+      orderClause = ` ORDER BY ${sortField} ${sortOrder}`;
+    }
+    sql += orderClause;
 
     // 分页
     const offset = (Number(page) - 1) * Number(limit);
@@ -169,15 +177,21 @@ router.get('/videos/:id', (req: Request, res: Response) => {
     // 增加观看次数
     getDb().prepare('UPDATE videos SET view_count = view_count + 1 WHERE id = ?').run(id);
 
-    // 获取作者的其他视频
-    const relatedVideos = video.author_id ? 
+    // 获取喜欢帧数量
+    const favoriteFramesCount = getDb().prepare('SELECT COUNT(*) as count FROM favorite_frames WHERE video_id = ?').get(id) as any;
+
+    // 获取喜欢帧列表
+    const favoriteFrames = getDb().prepare('SELECT * FROM favorite_frames WHERE video_id = ? ORDER BY time_seconds ASC').all(id) as any[];
+
+    // 获取同类别的其他视频
+    const relatedVideos = video.category_id ? 
       getDb().prepare(`
         SELECT id, title, duration, view_count
         FROM videos
-        WHERE author_id = ? AND id != ?
+        WHERE category_id = ? AND id != ?
         ORDER BY view_count DESC
         LIMIT 6
-      `).all(video.author_id, id) as any[] : [];
+      `).all(video.category_id, id) as any[] : [];
 
     res.json({
       success: true,
@@ -199,6 +213,14 @@ router.get('/videos/:id', (req: Request, res: Response) => {
           name: video.author_name,
           description: video.author_description
         } : null,
+        likeCount: video.like_count || 0,
+        isFavorite: video.is_favorite === 1,
+        favoriteFramesCount: favoriteFramesCount?.count || 0,
+        favoriteFrames: favoriteFrames.map(f => ({
+          id: f.id,
+          timeSeconds: f.time_seconds,
+          note: f.note
+        })),
         relatedVideos: relatedVideos.map(v => ({
           id: v.id,
           title: v.title,
@@ -210,6 +232,161 @@ router.get('/videos/:id', (req: Request, res: Response) => {
   } catch (error) {
     console.error('获取视频详情失败:', error);
     res.status(500).json({ success: false, error: '获取视频详情失败' });
+  }
+});
+
+// 获取同类别的视频
+router.get('/videos/:id/same-category', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { sort = 'random', order = 'desc', limit = 20 } = req.query;
+    
+    // 获取当前视频的分类
+    const video = getDb().prepare('SELECT category_id FROM videos WHERE id = ?').get(id) as any;
+    if (!video) {
+      return res.status(404).json({ success: false, error: '视频不存在' });
+    }
+
+    let sql = `
+      SELECT v.*, a.name as author_name, c.name as category_name
+      FROM videos v
+      LEFT JOIN authors a ON v.author_id = a.id
+      LEFT JOIN categories c ON v.category_id = c.id
+      WHERE v.category_id = ? AND v.id != ?
+    `;
+    const params: any[] = [video.category_id, id];
+
+    // 排序
+    let orderClause = '';
+    if (sort === 'random') {
+      orderClause = ' ORDER BY RANDOM()';
+    } else {
+      const sortField = sort === 'views' ? 'v.view_count' : 
+                        sort === 'duration' ? 'v.duration' :
+                        sort === 'size' ? 'v.file_size' :
+                        sort === 'author' ? 'a.name' :
+                        'v.file_modified_at';
+      const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
+      orderClause = ` ORDER BY ${sortField} ${sortOrder}`;
+    }
+    sql += orderClause;
+
+    sql += ' LIMIT ?';
+    params.push(Number(limit));
+
+    const videos = getDb().prepare(sql).all(...params) as any[];
+
+    // 格式化返回数据
+    const formattedVideos = videos.map(v => ({
+      id: v.id,
+      title: v.title,
+      duration: formatDuration(v.duration || 0),
+      durationSeconds: v.duration,
+      author: v.author_name || '未知作者',
+      views: formatViews(v.view_count || 0),
+      viewsCount: v.view_count || 0,
+      time: formatDate(v.file_modified_at || v.created_at),
+      fileSize: formatFileSize(v.file_size || 0),
+      category: v.category_name || '其他',
+      width: v.width,
+      height: v.height
+    }));
+
+    res.json({
+      success: true,
+      data: formattedVideos
+    });
+  } catch (error) {
+    console.error('获取同类别视频失败:', error);
+    res.status(500).json({ success: false, error: '获取同类别视频失败' });
+  }
+});
+
+// 添加喜欢帧
+router.post('/videos/:id/favorite-frames', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { timeSeconds, note } = req.body;
+
+    if (timeSeconds === undefined) {
+      return res.status(400).json({ success: false, error: '缺少 timeSeconds 参数' });
+    }
+
+    const result = getDb().prepare('INSERT INTO favorite_frames (video_id, time_seconds, note) VALUES (?, ?, ?)').run(id, timeSeconds, note || null);
+    res.json({ success: true, data: { id: result.lastInsertRowid } });
+  } catch (error) {
+    console.error('添加喜欢帧失败:', error);
+    res.status(500).json({ success: false, error: '添加喜欢帧失败' });
+  }
+});
+
+// 更新喜欢帧注释
+router.put('/videos/:id/favorite-frames/:frameId', (req: Request, res: Response) => {
+  try {
+    const { frameId } = req.params;
+    const { note } = req.body;
+    
+    getDb().prepare('UPDATE favorite_frames SET note = ? WHERE id = ?').run(note || null, frameId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('更新喜欢帧注释失败:', error);
+    res.status(500).json({ success: false, error: '更新喜欢帧注释失败' });
+  }
+});
+
+// 删除喜欢帧
+router.delete('/videos/:id/favorite-frames/:frameId', (req: Request, res: Response) => {
+  try {
+    const { frameId } = req.params;
+    getDb().prepare('DELETE FROM favorite_frames WHERE id = ?').run(frameId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('删除喜欢帧失败:', error);
+    res.status(500).json({ success: false, error: '删除喜欢帧失败' });
+  }
+});
+
+// 重置视频数据
+router.post('/videos/:id/reset', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    
+    // 删除喜欢的帧
+    getDb().prepare('DELETE FROM favorite_frames WHERE video_id = ?').run(id);
+    
+    // 重置播放量、点赞数、收藏状态
+    getDb().prepare('UPDATE videos SET view_count = 0, like_count = 0, is_favorite = 0 WHERE id = ?').run(id);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('重置视频数据失败:', error);
+    res.status(500).json({ success: false, error: '重置视频数据失败' });
+  }
+});
+
+// 增加点赞数
+router.post('/videos/:id/like', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    getDb().prepare('UPDATE videos SET like_count = like_count + 1 WHERE id = ?').run(id);
+    const { like_count } = getDb().prepare('SELECT like_count FROM videos WHERE id = ?').get(id) as any;
+    res.json({ success: true, data: { likeCount: like_count } });
+  } catch (error) {
+    console.error('点赞失败:', error);
+    res.status(500).json({ success: false, error: '点赞失败' });
+  }
+});
+
+// 切换收藏状态
+router.post('/videos/:id/favorite', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { isFavorite } = req.body;
+    getDb().prepare('UPDATE videos SET is_favorite = ? WHERE id = ?').run(isFavorite ? 1 : 0, id);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('切换收藏失败:', error);
+    res.status(500).json({ success: false, error: '切换收藏失败' });
   }
 });
 
