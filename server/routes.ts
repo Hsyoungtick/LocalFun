@@ -55,7 +55,7 @@ router.get('/videos', (req: Request, res: Response) => {
     const { category, author, sort, order, search, page = 1, limit = 20 } = req.query;
     
     let sql = `
-      SELECT v.*, a.name as author_name, a.avatar as author_avatar, c.name as category_name
+      SELECT v.*, a.name as author_name, c.name as category_name
       FROM videos v
       LEFT JOIN authors a ON v.author_id = a.id
       LEFT JOIN categories c ON v.category_id = c.id
@@ -124,7 +124,6 @@ router.get('/videos', (req: Request, res: Response) => {
       duration: formatDuration(v.duration || 0),
       durationSeconds: v.duration,
       author: v.author_name || '未知作者',
-      authorAvatar: v.author_avatar,
       views: formatViews(v.view_count || 0),
       viewsCount: v.view_count || 0,
       time: formatDate(v.file_modified_at || v.created_at),
@@ -156,7 +155,7 @@ router.get('/videos/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     
     const video = getDb().prepare(`
-      SELECT v.*, a.name as author_name, a.avatar as author_avatar, a.description as author_description, c.name as category_name
+      SELECT v.*, a.name as author_name, a.description as author_description, c.name as category_name
       FROM videos v
       LEFT JOIN authors a ON v.author_id = a.id
       LEFT JOIN categories c ON v.category_id = c.id
@@ -198,7 +197,6 @@ router.get('/videos/:id', (req: Request, res: Response) => {
         category: video.category_name || '其他',
         author: video.author_name ? {
           name: video.author_name,
-          avatar: video.author_avatar,
           description: video.author_description
         } : null,
         relatedVideos: relatedVideos.map(v => ({
@@ -323,7 +321,6 @@ router.get('/authors', (req: Request, res: Response) => {
       data: authors.map(a => ({
         id: a.id,
         name: a.name,
-        avatar: a.avatar,
         description: a.description,
         videoCount: a.video_count
       }))
@@ -367,7 +364,6 @@ router.get('/authors/:name', (req: Request, res: Response) => {
       data: {
         id: author.id,
         name: author.name,
-        avatar: author.avatar,
         description: author.description,
         totalVideos: stats.total_videos || 0,
         totalViews: formatViews(stats.total_views || 0),
@@ -391,20 +387,19 @@ router.get('/authors/:name', (req: Request, res: Response) => {
 // 创建作者
 router.post('/authors', (req: Request, res: Response) => {
   try {
-    const { name, avatar, description } = req.body;
+    const { name, description } = req.body;
     
     if (!name) {
       return res.status(400).json({ success: false, error: '作者名称不能为空' });
     }
 
-    const result = getDb().prepare('INSERT INTO authors (name, avatar, description) VALUES (?, ?, ?)').run(name, avatar, description);
+    const result = getDb().prepare('INSERT INTO authors (name, description) VALUES (?, ?)').run(name, description);
     
     res.json({
       success: true,
       data: {
         id: result.lastInsertRowid,
         name,
-        avatar,
         description
       }
     });
@@ -421,7 +416,7 @@ router.post('/authors', (req: Request, res: Response) => {
 router.put('/authors/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, avatar, description } = req.body;
+    const { name, description } = req.body;
 
     const updates: string[] = [];
     const params: any[] = [];
@@ -429,10 +424,6 @@ router.put('/authors/:id', (req: Request, res: Response) => {
     if (name !== undefined) {
       updates.push('name = ?');
       params.push(name);
-    }
-    if (avatar !== undefined) {
-      updates.push('avatar = ?');
-      params.push(avatar);
     }
     if (description !== undefined) {
       updates.push('description = ?');

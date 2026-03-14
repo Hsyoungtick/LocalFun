@@ -122,42 +122,28 @@ export default function Profile() {
     <main className="flex-1 max-w-[1280px] mx-auto w-full px-0 lg:px-4">
       {/* 作者头部 */}
       <div className="bg-white dark:bg-slate-900 p-4 lg:rounded-xl shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-end gap-4">
-          <div className="bg-white dark:bg-slate-900 p-1 rounded-full shrink-0">
-            <div 
-              className="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-24 md:size-32 border-4 border-white dark:border-slate-900 flex items-center justify-center bg-slate-200 dark:bg-slate-700" 
-              style={author.avatar ? { backgroundImage: `url(${author.avatar})` } : {}}
-            >
-              {!author.avatar && (
-                <span className="material-symbols-outlined text-4xl text-slate-400">person</span>
-              )}
+        <div className="flex flex-col gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 
+                className="text-2xl font-bold tracking-tight cursor-context-menu hover:text-primary transition-colors"
+                onContextMenu={handleAuthorNameContextMenu}
+              >
+                {author.name}
+              </h1>
             </div>
-          </div>
-          <div className="flex-1 pb-2">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 
-                    className="text-2xl font-bold tracking-tight cursor-context-menu hover:text-primary transition-colors"
-                    onContextMenu={handleAuthorNameContextMenu}
-                  >
-                    {author.name}
-                  </h1>
-                </div>
-                {author.description && (
-                  <p className="text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
-                    {author.description}
-                  </p>
-                )}
-                <div className="flex gap-4 mt-2 text-sm">
-                  <span className="text-slate-900 dark:text-slate-100 font-medium">
-                    {author.totalVideos || 0} <span className="text-slate-500 font-normal">个视频</span>
-                  </span>
-                  <span className="text-slate-900 dark:text-slate-100 font-medium">
-                    {author.totalViews || '0'} <span className="text-slate-500 font-normal">次观看</span>
-                  </span>
-                </div>
-              </div>
+            {author.description && (
+              <p className="text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
+                {author.description}
+              </p>
+            )}
+            <div className="flex gap-4 mt-2 text-sm">
+              <span className="text-slate-900 dark:text-slate-100 font-medium">
+                {author.totalVideos || 0} <span className="text-slate-500 font-normal">个视频</span>
+              </span>
+              <span className="text-slate-900 dark:text-slate-100 font-medium">
+                {author.totalViews || '0'} <span className="text-slate-500 font-normal">次观看</span>
+              </span>
             </div>
           </div>
         </div>

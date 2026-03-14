@@ -7,7 +7,6 @@ export interface Video {
   duration: string;
   durationSeconds: number;
   author: string;
-  authorAvatar?: string;
   views: string;
   viewsCount: number;
   time: string;
@@ -33,7 +32,6 @@ export interface VideoDetail {
   category: string;
   author?: {
     name: string;
-    avatar?: string;
     description?: string;
   };
   relatedVideos: {
@@ -47,7 +45,6 @@ export interface VideoDetail {
 export interface Author {
   id: number;
   name: string;
-  avatar?: string;
   description?: string;
   videoCount?: number;
   totalVideos?: number;
