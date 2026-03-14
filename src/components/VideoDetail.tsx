@@ -224,18 +224,20 @@ export default function VideoDetail() {
           </div>
         </div>
 
-        {/* 右侧：作者信息（无背景，高度与左侧相等） */}
-        <div className="w-full md:w-1/4 flex items-center gap-3">
-          <div className="flex-1 min-w-0">
-            <Link 
-              to={video.author ? `/author/${video.author.name}` : '#'} 
-              className="font-bold text-slate-900 dark:text-slate-100 hover:text-primary transition-colors block truncate"
-            >
-              {authorName}
-            </Link>
-            {authorDescription && (
-              <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{authorDescription}</p>
-            )}
+        {/* 右侧：作者信息 */}
+        <div className="w-full md:w-1/4">
+          <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm h-full flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <Link 
+                to={video.author ? `/author/${video.author.name}` : '#'} 
+                className="font-bold text-slate-900 dark:text-slate-100 hover:text-primary transition-colors block truncate"
+              >
+                {authorName}
+              </Link>
+              {authorDescription && (
+                <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{authorDescription}</p>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -246,7 +248,7 @@ export default function VideoDetail() {
         <div className="w-full md:w-3/4 flex flex-col justify-between">
           <div 
             ref={playerContainerRef}
-            className="relative group rounded-xl overflow-hidden bg-black shadow-2xl"
+            className="relative group rounded-xl overflow-hidden bg-black"
           >
             <CustomVideoPlayer
               ref={videoPlayerRef}
@@ -264,57 +266,59 @@ export default function VideoDetail() {
           </div>
           
           {/* 操作按钮 */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                const currentTime = videoPlayerRef.current?.getCurrentTime() || 0;
-                console.log('Adding favorite frame at time:', currentTime);
-                handleAddFavoriteFrame(currentTime);
-              }}
-              className="flex items-center justify-center gap-1 w-20 h-14 rounded-lg transition-all group"
-            >
-              <span className="material-symbols-outlined text-8xl text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500">thumb_up</span>
-              {video.favoriteFramesCount > 0 && (
-                <span className="text-lg font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500">
-                  {video.favoriteFramesCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={handleLike}
-              className="flex items-center justify-center gap-1 w-20 h-14 rounded-lg transition-all group"
-            >
-              <span className="material-symbols-outlined text-8xl text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500">favorite</span>
-              {video.likeCount > 0 && (
-                <span className="text-lg font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500">
-                  {video.likeCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={handleToggleFavorite}
-              className={`flex items-center justify-center w-20 h-14 rounded-lg transition-all ${
-                video.isFavorite 
-                  ? '' 
-                  : 'group'
-              }`}
-            >
-              <span 
-                className={`material-symbols-outlined text-8xl transition-colors ${video.isFavorite ? 'text-yellow-500' : 'text-slate-600 dark:text-slate-400 group-hover:text-pink-500'}`}
-                style={video.isFavorite ? { fontVariationSettings: "'FILL' 1" } : {}}
+          <div className="flex items-center justify-between w-full">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const currentTime = videoPlayerRef.current?.getCurrentTime() || 0;
+                  console.log('Adding favorite frame at time:', currentTime);
+                  handleAddFavoriteFrame(currentTime);
+                }}
+                className="flex items-center justify-center w-20 h-20 rounded-lg transition-all group"
               >
-                star
-              </span>
-            </button>
+                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>thumb_up</span>
+                {video.favoriteFramesCount > 0 && (
+                  <span className="text-lg font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500 ml-1">
+                    {video.favoriteFramesCount}
+                  </span>
+                )}
+              </button>
 
-            <button
-              onClick={() => setShowMoveDialog(true)}
-              className="flex items-center justify-center w-20 h-14 rounded-lg transition-all group"
-            >
-              <span className="material-symbols-outlined text-8xl text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500">drive_file_move</span>
-            </button>
+              <button
+                onClick={handleLike}
+                className="flex items-center justify-center w-20 h-20 rounded-lg transition-all group"
+              >
+                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>favorite</span>
+                {video.likeCount > 0 && (
+                  <span className="text-lg font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500 ml-1">
+                    {video.likeCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={handleToggleFavorite}
+                className={`flex items-center justify-center w-20 h-20 rounded-lg transition-all ${
+                  video.isFavorite 
+                    ? '' 
+                    : 'group'
+                }`}
+              >
+                <span 
+                  className={`material-symbols-outlined transition-colors ${video.isFavorite ? 'text-yellow-500' : 'text-slate-600 dark:text-slate-400 group-hover:text-pink-500'}`}
+                  style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}
+                >
+                  star
+                </span>
+              </button>
+
+              <button
+                onClick={() => setShowMoveDialog(true)}
+                className="flex items-center justify-center w-20 h-20 rounded-lg transition-all group"
+              >
+                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>drive_file_move</span>
+              </button>
+            </div>
 
             <button
               onClick={() => {
@@ -322,9 +326,9 @@ export default function VideoDetail() {
                   handleResetVideoData();
                 }
               }}
-              className="flex items-center justify-center w-20 h-14 rounded-lg transition-all group"
+              className="flex items-center justify-center w-20 h-20 rounded-lg transition-all group"
             >
-              <span className="material-symbols-outlined text-8xl text-slate-600 dark:text-slate-400 transition-colors group-hover:text-red-500">restart_alt</span>
+              <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-red-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>restart_alt</span>
             </button>
           </div>
         </div>
