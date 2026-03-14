@@ -1,24 +1,22 @@
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import React, { useState, useEffect, FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
 import { getVideos, getCategories, Video, Category, renameVideo } from '../api';
 import VideoPreview from './VideoPreview';
 import ContextMenu from './ContextMenu';
 import EditDialog from './EditDialog';
+import { useAppContext } from '../context/AppContext';
 
 export default function Home() {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { selectedCategory, searchQuery } = useAppContext();
   const [videos, setVideos] = useState<Video[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState('全部');
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('random');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   
-  // 右键菜单和编辑对话框状态
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -31,12 +29,14 @@ export default function Home() {
     video: Video;
   } | null>(null);
 
-  // 加载分类
   useEffect(() => {
     getCategories().then(setCategories).catch(console.error);
   }, []);
 
-  // 加载视频
+  useEffect(() => {
+    setPage(1);
+  }, [selectedCategory, searchQuery]);
+
   useEffect(() => {
     setLoading(true);
     getVideos({
@@ -55,19 +55,6 @@ export default function Home() {
       .finally(() => setLoading(false));
   }, [selectedCategory, searchQuery, sortBy, sortOrder, page]);
 
-  // 处理分类选择
-  const handleCategoryClick = (category: string) => {
-    setSelectedCategory(category);
-    setPage(1);
-  };
-
-  // 处理搜索
-  const handleSearch = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setPage(1);
-  };
-
-  // 右键菜单处理
   const handleTitleContextMenu = (e: React.MouseEvent, video: Video) => {
     e.preventDefault();
     e.stopPropagation();
@@ -113,7 +100,6 @@ export default function Home() {
       } else {
         await renameVideo(editDialog.video.id, { newAuthor: newValue });
       }
-      // 重新加载视频
       setLoading(true);
       const data = await getVideos({
         category: selectedCategory,
@@ -136,35 +122,7 @@ export default function Home() {
 
   return (
     <main className="flex-1 flex flex-col w-full max-w-400 mx-auto">
-      {/* 分类标签 */}
-      <div className="flex items-center gap-3 p-4 overflow-x-auto no-scrollbar scroll-smooth">
-        <div
-          onClick={() => handleCategoryClick('全部')}
-          className={`flex h-9 shrink-0 items-center justify-center rounded-full px-5 cursor-pointer transition-colors ${
-            selectedCategory === '全部'
-              ? 'bg-primary text-white'
-              : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-primary/10 hover:text-primary'
-          }`}
-        >
-          <span className="text-sm font-medium">全部</span>
-        </div>
-        {categories.map((cat) => (
-          <div
-            key={cat.id}
-            onClick={() => handleCategoryClick(cat.name)}
-            className={`flex h-9 shrink-0 items-center justify-center rounded-full px-5 cursor-pointer transition-colors ${
-              selectedCategory === cat.name
-                ? 'bg-primary text-white'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-primary/10 hover:text-primary'
-            }`}
-          >
-            <span className="text-sm font-medium">{cat.name}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* 排序和筛选 */}
-      <div className="flex items-center justify-between px-4 mb-4">
+      <div className="flex items-center justify-between px-4 mb-4 pt-4">
         <div className="flex items-center gap-2">
           <select
             value={sortBy}
@@ -192,7 +150,6 @@ export default function Home() {
         <span className="text-sm text-slate-500">共 {videos.length} 个视频</span>
       </div>
 
-      {/* 视频网格 */}
       {loading ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-slate-500">加载中...</div>
@@ -246,7 +203,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* 分页 */}
       {totalPages > 1 && (
         <div className="flex justify-center items-center gap-2 py-6">
           <button
@@ -269,7 +225,6 @@ export default function Home() {
         </div>
       )}
       
-      {/* 右键菜单 */}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -280,7 +235,6 @@ export default function Home() {
         />
       )}
       
-      {/* 编辑对话框 */}
       {editDialog && (
         <EditDialog
           isOpen={editDialog.isOpen}

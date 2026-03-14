@@ -275,11 +275,11 @@ export default function VideoDetail() {
                   console.log('Adding favorite frame at time:', currentTime);
                   handleAddFavoriteFrame(currentTime);
                 }}
-                className="flex items-center justify-center w-28 h-20 rounded-lg transition-all group"
+                className="flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all group"
               >
-                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>thumb_up</span>
+                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>thumb_up</span>
                 {video.favoriteFramesCount > 0 && (
-                  <span className="text-lg font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500 ml-1">
+                  <span className="text-base font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500 ml-1">
                     {video.favoriteFramesCount}
                   </span>
                 )}
@@ -287,11 +287,11 @@ export default function VideoDetail() {
 
               <button
                 onClick={handleLike}
-                className="flex items-center justify-center w-28 h-20 rounded-lg transition-all group"
+                className="flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all group"
               >
-                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>favorite</span>
+                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>favorite</span>
                 {video.likeCount > 0 && (
-                  <span className="text-lg font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500 ml-1">
+                  <span className="text-base font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500 ml-1">
                     {video.likeCount}
                   </span>
                 )}
@@ -299,7 +299,7 @@ export default function VideoDetail() {
 
               <button
                 onClick={handleToggleFavorite}
-                className={`flex items-center justify-center w-28 h-20 rounded-lg transition-all ${
+                className={`flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all ${
                   video.isFavorite 
                     ? '' 
                     : 'group'
@@ -307,7 +307,7 @@ export default function VideoDetail() {
               >
                 <span 
                   className={`material-symbols-outlined transition-colors ${video.isFavorite ? 'text-yellow-500' : 'text-slate-600 dark:text-slate-400 group-hover:text-pink-500'}`}
-                  style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}
+                  style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}
                 >
                   star
                 </span>
@@ -315,9 +315,9 @@ export default function VideoDetail() {
 
               <button
                 onClick={() => setShowMoveDialog(true)}
-                className="flex items-center justify-center w-28 h-20 rounded-lg transition-all group"
+                className="flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all group"
               >
-                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>drive_file_move</span>
+                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>drive_file_move</span>
               </button>
             </div>
 
@@ -327,9 +327,9 @@ export default function VideoDetail() {
                   handleResetVideoData();
                 }
               }}
-              className="flex items-center justify-center w-28 h-20 rounded-lg transition-all group"
+              className="flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all group"
             >
-              <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-red-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>restart_alt</span>
+              <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-red-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>restart_alt</span>
             </button>
           </div>
         </div>
