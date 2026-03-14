@@ -68,12 +68,13 @@ export default function VideoDetail() {
   }, [id, sortBy, sortOrder]);
 
   const handleAddFavoriteFrame = useCallback((timeSeconds: number) => {
-    console.log('handleAddFavoriteFrame called with time:', timeSeconds);
-    setTempTimeSeconds(timeSeconds);
-    setFrameNote('');
-    setEditingFrameId(null);
-    setShowAddFrameDialog(true);
-  }, []);
+    if (!id || !video) return;
+    
+    addFavoriteFrame(parseInt(id), timeSeconds)
+      .then(() => getVideoDetail(parseInt(id)))
+      .then(setVideo)
+      .catch(console.error);
+  }, [id, video]);
 
   const handleSaveFavoriteFrame = useCallback(() => {
     if (!id || !video) return;
@@ -274,7 +275,7 @@ export default function VideoDetail() {
                   console.log('Adding favorite frame at time:', currentTime);
                   handleAddFavoriteFrame(currentTime);
                 }}
-                className="flex items-center justify-center w-20 h-20 rounded-lg transition-all group"
+                className="flex items-center justify-center w-28 h-20 rounded-lg transition-all group"
               >
                 <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>thumb_up</span>
                 {video.favoriteFramesCount > 0 && (
@@ -286,7 +287,7 @@ export default function VideoDetail() {
 
               <button
                 onClick={handleLike}
-                className="flex items-center justify-center w-20 h-20 rounded-lg transition-all group"
+                className="flex items-center justify-center w-28 h-20 rounded-lg transition-all group"
               >
                 <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>favorite</span>
                 {video.likeCount > 0 && (
@@ -298,7 +299,7 @@ export default function VideoDetail() {
 
               <button
                 onClick={handleToggleFavorite}
-                className={`flex items-center justify-center w-20 h-20 rounded-lg transition-all ${
+                className={`flex items-center justify-center w-28 h-20 rounded-lg transition-all ${
                   video.isFavorite 
                     ? '' 
                     : 'group'
@@ -314,7 +315,7 @@ export default function VideoDetail() {
 
               <button
                 onClick={() => setShowMoveDialog(true)}
-                className="flex items-center justify-center w-20 h-20 rounded-lg transition-all group"
+                className="flex items-center justify-center w-28 h-20 rounded-lg transition-all group"
               >
                 <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>drive_file_move</span>
               </button>
@@ -326,7 +327,7 @@ export default function VideoDetail() {
                   handleResetVideoData();
                 }
               }}
-              className="flex items-center justify-center w-20 h-20 rounded-lg transition-all group"
+              className="flex items-center justify-center w-28 h-20 rounded-lg transition-all group"
             >
               <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-red-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '2.5rem' }}>restart_alt</span>
             </button>
@@ -361,7 +362,7 @@ export default function VideoDetail() {
             </div>
 
             {/* 标签内容 */}
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto no-scrollbar">
               {activeTab === 'subtitles' ? (
                 <div className="text-sm text-slate-400 text-center py-4 flex items-center justify-center h-full">
                   暂无字幕
