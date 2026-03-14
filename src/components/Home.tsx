@@ -1,7 +1,9 @@
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useEffect, FormEvent } from 'react';
-import { getVideos, getCategories, Video, Category } from '../api';
+import { getVideos, getCategories, Video, Category, renameVideo } from '../api';
 import VideoPreview from './VideoPreview';
+import ContextMenu from './ContextMenu';
+import EditDialog from './EditDialog';
 
 export default function Home() {
   const navigate = useNavigate();
@@ -15,6 +17,19 @@ export default function Home() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  
+  // 右键菜单和编辑对话框状态
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    type: 'title' | 'author';
+    video: Video;
+  } | null>(null);
+  const [editDialog, setEditDialog] = useState<{
+    isOpen: boolean;
+    type: 'title' | 'author';
+    video: Video;
+  } | null>(null);
 
   // 加载分类
   useEffect(() => {
@@ -50,6 +65,73 @@ export default function Home() {
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setPage(1);
+  };
+
+  // 右键菜单处理
+  const handleTitleContextMenu = (e: React.MouseEvent, video: Video) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      type: 'title',
+      video
+    });
+  };
+
+  const handleAuthorContextMenu = (e: React.MouseEvent, video: Video) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      type: 'author',
+      video
+    });
+  };
+
+  const handleCloseContextMenu = () => {
+    setContextMenu(null);
+  };
+
+  const handleEdit = () => {
+    if (contextMenu) {
+      setEditDialog({
+        isOpen: true,
+        type: contextMenu.type,
+        video: contextMenu.video
+      });
+    }
+  };
+
+  const handleSaveEdit = async (newValue: string) => {
+    if (!editDialog) return;
+    
+    try {
+      if (editDialog.type === 'title') {
+        await renameVideo(editDialog.video.id, { newTitle: newValue });
+      } else {
+        await renameVideo(editDialog.video.id, { newAuthor: newValue });
+      }
+      // 重新加载视频
+      setLoading(true);
+      const data = await getVideos({
+        category: selectedCategory,
+        search: searchQuery || undefined,
+        sort: sortBy,
+        order: sortOrder,
+        page,
+        limit: 20
+      });
+      setVideos(data.videos);
+      setTotalPages(data.totalPages);
+    } catch (error) {
+      console.error('修改失败:', error);
+      alert('修改失败');
+    } finally {
+      setLoading(false);
+      setEditDialog(null);
+    }
   };
 
   return (
@@ -135,14 +217,18 @@ export default function Home() {
                 />
               </div>
               <div className="flex flex-col min-w-0">
-                <h3 className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 group-hover:text-primary transition-colors">
+                <h3 
+                  className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 group-hover:text-primary transition-colors cursor-context-menu"
+                  onContextMenu={(e) => handleTitleContextMenu(e, video)}
+                >
                   {video.title}
                 </h3>
                 <div className="text-slate-500 dark:text-slate-400 text-xs mt-1 flex items-center gap-1 flex-wrap">
                   <Link
                     onClick={(e) => e.stopPropagation()}
                     to={`/author/${video.author}`}
-                    className="hover:text-primary transition-colors"
+                    className="hover:text-primary transition-colors cursor-context-menu"
+                    onContextMenu={(e) => handleAuthorContextMenu(e, video)}
                   >
                     {video.author}
                   </Link>
@@ -176,6 +262,28 @@ export default function Home() {
             <span className="material-symbols-outlined text-sm">chevron_right</span>
           </button>
         </div>
+      )}
+      
+      {/* 右键菜单 */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={handleCloseContextMenu}
+          onEdit={handleEdit}
+          label={contextMenu.type === 'title' ? '标题' : '作者名'}
+        />
+      )}
+      
+      {/* 编辑对话框 */}
+      {editDialog && (
+        <EditDialog
+          isOpen={editDialog.isOpen}
+          onClose={() => setEditDialog(null)}
+          onSave={handleSaveEdit}
+          initialValue={editDialog.type === 'title' ? editDialog.video.title : editDialog.video.author}
+          label={editDialog.type === 'title' ? '标题' : '作者名'}
+        />
       )}
     </main>
   );

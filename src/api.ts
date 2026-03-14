@@ -56,7 +56,9 @@ export interface Author {
     id: number;
     title: string;
     duration: string;
+    durationSeconds: number;
     views: string;
+    viewsCount: number;
     time: string;
   }[];
 }
@@ -313,4 +315,32 @@ export async function getScanProgress(): Promise<{
   
   if (!data.success) throw new Error(data.error);
   return data.data;
+}
+
+// 修改视频标题
+export async function renameVideo(
+  id: number, 
+  options: { newTitle?: string; newAuthor?: string }
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${id}/rename`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options)
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 批量修改作者名
+export async function renameAuthor(id: number, newName: string): Promise<string> {
+  const response = await fetch(`${API_BASE}/authors/${id}/rename`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newName })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.message;
 }

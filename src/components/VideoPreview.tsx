@@ -50,6 +50,7 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
 
   // 格式化时间显示
   const formatTime = (seconds: number) => {
+    if (!seconds || isNaN(seconds)) return '0:00';
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;

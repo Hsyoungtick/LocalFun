@@ -375,7 +375,9 @@ router.get('/authors/:name', (req: Request, res: Response) => {
           id: v.id,
           title: v.title,
           duration: formatDuration(v.duration || 0),
+          durationSeconds: v.duration || 0,
           views: formatViews(v.view_count || 0),
+          viewsCount: v.view_count || 0,
           time: formatDate(v.file_modified_at || v.created_at)
         }))
       }
@@ -950,6 +952,149 @@ router.post('/rescan-all', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('全部重新扫描失败:', error);
     res.status(500).json({ success: false, error: '全部重新扫描失败' });
+  }
+});
+
+// 修改视频的标题和文件路径（同时重命名文件）
+router.put('/videos/:id/rename', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { newTitle, newAuthor } = req.body;
+
+    const video = getDb().prepare('SELECT * FROM videos WHERE id = ?').get(id) as any;
+    if (!video) {
+      return res.status(404).json({ success: false, error: '视频不存在' });
+    }
+
+    const oldFilePath = video.file_path;
+    const ext = path.extname(oldFilePath);
+    const dir = path.dirname(oldFilePath);
+    let newFileName = '';
+    
+    // 如果提供了 newAuthor，保留或添加作者名前缀
+    if (newAuthor !== undefined) {
+      newFileName = `【${newAuthor}】${newTitle || video.title}${ext}`;
+    } else {
+      // 从原文件名中提取作者名（如果有）
+      const oldFileName = path.basename(oldFilePath, ext);
+      const authorMatch = oldFileName.match(/^【(.+?)】(.*)$/);
+      if (authorMatch) {
+        newFileName = `【${authorMatch[1]}】${newTitle || video.title}${ext}`;
+      } else {
+        newFileName = `${newTitle || video.title}${ext}`;
+      }
+    }
+    
+    const newFilePath = path.join(dir, newFileName);
+
+    // 检查新路径是否已存在
+    if (fs.existsSync(newFilePath) && newFilePath !== oldFilePath) {
+      return res.status(400).json({ success: false, error: '目标文件已存在' });
+    }
+
+    // 重命名文件
+    if (newFilePath !== oldFilePath) {
+      fs.renameSync(oldFilePath, newFilePath);
+      console.log(`重命名文件: ${oldFilePath} -> ${newFilePath}`);
+    }
+
+    // 更新数据库
+    const updateVideo = getDb().prepare('UPDATE videos SET title = ?, file_path = ? WHERE id = ?');
+    updateVideo.run(newTitle || video.title, newFilePath, id);
+
+    // 如果修改了作者，同时更新作者信息
+    if (newAuthor !== undefined) {
+      let authorId: number | null = null;
+      if (newAuthor) {
+        let authorResult = getDb().prepare('SELECT id FROM authors WHERE name = ?').get(newAuthor);
+        if (authorResult) {
+          authorId = (authorResult as any).id;
+        } else {
+          const insertAuthor = getDb().prepare('INSERT INTO authors (name) VALUES (?)').run(newAuthor);
+          authorId = insertAuthor.lastInsertRowid as number;
+        }
+      }
+      const updateAuthor = getDb().prepare('UPDATE videos SET author_id = ? WHERE id = ?');
+      updateAuthor.run(authorId, id);
+    }
+
+    res.json({ success: true, message: '修改成功' });
+  } catch (error) {
+    console.error('修改视频失败:', error);
+    res.status(500).json({ success: false, error: '修改失败' });
+  }
+});
+
+// 批量修改作者名（修改该作者所有视频的文件名）
+router.put('/authors/:id/rename', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { newName } = req.body;
+
+    if (!newName) {
+      return res.status(400).json({ success: false, error: '作者名不能为空' });
+    }
+
+    const author = getDb().prepare('SELECT * FROM authors WHERE id = ?').get(id) as any;
+    if (!author) {
+      return res.status(404).json({ success: false, error: '作者不存在' });
+    }
+
+    // 获取该作者的所有视频
+    const videos = getDb().prepare('SELECT * FROM videos WHERE author_id = ?').all(id) as any[];
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const video of videos) {
+      try {
+        const oldFilePath = video.file_path;
+        const ext = path.extname(oldFilePath);
+        const dir = path.dirname(oldFilePath);
+        const oldFileName = path.basename(oldFilePath, ext);
+        
+        // 替换或添加作者名前缀
+        let newFileName = '';
+        const authorMatch = oldFileName.match(/^【(.+?)】(.*)$/);
+        if (authorMatch) {
+          newFileName = `【${newName}】${authorMatch[2]}${ext}`;
+        } else {
+          newFileName = `【${newName}】${oldFileName}${ext}`;
+        }
+        
+        const newFilePath = path.join(dir, newFileName);
+
+        // 检查新路径是否已存在
+        if (fs.existsSync(newFilePath) && newFilePath !== oldFilePath) {
+          failCount++;
+          continue;
+        }
+
+        // 重命名文件
+        if (newFilePath !== oldFilePath) {
+          fs.renameSync(oldFilePath, newFilePath);
+        }
+
+        // 更新数据库
+        const updateVideo = getDb().prepare('UPDATE videos SET file_path = ? WHERE id = ?');
+        updateVideo.run(newFilePath, video.id);
+        successCount++;
+      } catch (e) {
+        console.error(`修改视频 ${video.id} 失败:`, e);
+        failCount++;
+      }
+    }
+
+    // 更新作者名
+    const updateAuthor = getDb().prepare('UPDATE authors SET name = ? WHERE id = ?');
+    updateAuthor.run(newName, id);
+
+    res.json({ 
+      success: true, 
+      message: `修改完成，成功 ${successCount} 个，失败 ${failCount} 个` 
+    });
+  } catch (error) {
+    console.error('批量修改作者名失败:', error);
+    res.status(500).json({ success: false, error: '修改失败' });
   }
 });
 
