@@ -1,5 +1,33 @@
 const API_BASE = 'http://localhost:3001/api';
 
+// 智能格式化时间显示
+export function formatSmartTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  
+  const oneDay = 24 * 60 * 60 * 1000;
+  const twoDays = 2 * oneDay;
+  const threeDays = 3 * oneDay;
+  
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  const timeStr = `${hours}:${minutes}`;
+  
+  if (diff < oneDay && date.getDate() === now.getDate()) {
+    return `今天 ${timeStr}`;
+  } else if (diff < twoDays) {
+    return `昨天 ${timeStr}`;
+  } else if (diff < threeDays) {
+    return `前天 ${timeStr}`;
+  } else {
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day} ${timeStr}`;
+  }
+}
+
 // 视频数据类型
 export interface Video {
   id: number;
@@ -50,6 +78,7 @@ export interface VideoDetail {
     duration: string;
     views: string;
   }[];
+  playProgress?: number;
 }
 
 export interface Author {

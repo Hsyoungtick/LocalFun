@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { getCategories, getFavoriteVideos, getHistoryVideos, Category, Video, getThumbnailUrl } from '../api';
+import { getCategories, getFavoriteVideos, getHistoryVideos, Category, Video, getThumbnailUrl, formatSmartTime } from '../api';
 
 export default function Header() {
   const navigate = useNavigate();
@@ -203,7 +203,7 @@ export default function Header() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium line-clamp-2">{video.title}</div>
-                        <div className="text-xs text-slate-500 mt-1">{video.time}</div>
+                        <div className="text-xs text-slate-500 mt-1">{video.author}</div>
                       </div>
                     </div>
                   ))
@@ -258,7 +258,7 @@ export default function Header() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium line-clamp-2">{video.title}</div>
-                        <div className="text-xs text-slate-500 mt-1">{video.time}</div>
+                        <div className="text-xs text-slate-500 mt-1">{video.lastPlayedAt ? formatSmartTime(video.lastPlayedAt) : video.time}</div>
                       </div>
                     </div>
                   ))

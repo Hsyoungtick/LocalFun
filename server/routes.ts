@@ -55,10 +55,11 @@ router.get('/videos', (req: Request, res: Response) => {
     const { category, author, sort, order, search, page = 1, limit = 20 } = req.query;
     
     let sql = `
-      SELECT v.*, a.name as author_name, c.name as category_name
+      SELECT v.*, a.name as author_name, c.name as category_name, ph.last_played_at
       FROM videos v
       LEFT JOIN authors a ON v.author_id = a.id
       LEFT JOIN categories c ON v.category_id = c.id
+      LEFT JOIN play_history ph ON v.id = ph.video_id
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -91,6 +92,7 @@ router.get('/videos', (req: Request, res: Response) => {
                         sort === 'size' ? 'v.file_size' :
                         sort === 'author' ? 'a.name' :
                         sort === 'category' ? 'c.name' :
+                        sort === 'last_played' ? 'ph.last_played_at' :
                         'v.file_modified_at';
       const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
       orderClause = ` ORDER BY ${sortField} ${sortOrder}`;
@@ -138,7 +140,8 @@ router.get('/videos', (req: Request, res: Response) => {
       fileSize: formatFileSize(v.file_size || 0),
       category: v.category_name || '其他',
       width: v.width,
-      height: v.height
+      height: v.height,
+      lastPlayedAt: v.last_played_at
     }));
 
     res.json({
@@ -163,10 +166,11 @@ router.get('/videos/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     
     const video = getDb().prepare(`
-      SELECT v.*, a.name as author_name, a.description as author_description, c.name as category_name
+      SELECT v.*, a.name as author_name, a.description as author_description, c.name as category_name, ph.play_progress
       FROM videos v
       LEFT JOIN authors a ON v.author_id = a.id
       LEFT JOIN categories c ON v.category_id = c.id
+      LEFT JOIN play_history ph ON v.id = ph.video_id
       WHERE v.id = ?
     `).get(id) as any;
 
@@ -226,7 +230,8 @@ router.get('/videos/:id', (req: Request, res: Response) => {
           title: v.title,
           duration: formatDuration(v.duration || 0),
           views: formatViews(v.view_count || 0)
-        }))
+        })),
+        playProgress: video.play_progress
       }
     });
   } catch (error) {
@@ -1327,10 +1332,11 @@ router.get('/favorites', (req: Request, res: Response) => {
     const { sort = 'created_at', order = 'desc', search, page = 1, limit = 20 } = req.query;
     
     let sql = `
-      SELECT v.*, a.name as author_name, c.name as category_name
+      SELECT v.*, a.name as author_name, c.name as category_name, ph.last_played_at
       FROM videos v
       LEFT JOIN authors a ON v.author_id = a.id
       LEFT JOIN categories c ON v.category_id = c.id
+      LEFT JOIN play_history ph ON v.id = ph.video_id
       WHERE v.is_favorite = 1
     `;
     const params: any[] = [];
@@ -1348,6 +1354,7 @@ router.get('/favorites', (req: Request, res: Response) => {
                       sort === 'size' ? 'v.file_size' :
                       sort === 'author' ? 'a.name' :
                       sort === 'category' ? 'c.name' :
+                      sort === 'last_played' ? 'ph.last_played_at' :
                       'v.created_at';
     const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
     orderClause = ` ORDER BY ${sortField} ${sortOrder}`;
@@ -1388,7 +1395,8 @@ router.get('/favorites', (req: Request, res: Response) => {
       fileSize: formatFileSize(v.file_size || 0),
       category: v.category_name || '其他',
       width: v.width,
-      height: v.height
+      height: v.height,
+      lastPlayedAt: v.last_played_at
     }));
 
     res.json({
@@ -1410,7 +1418,7 @@ router.get('/favorites', (req: Request, res: Response) => {
 // 获取观看历史
 router.get('/history', (req: Request, res: Response) => {
   try {
-    const { sort = 'last_played_at', order = 'desc', search, page = 1, limit = 20 } = req.query;
+    const { sort = 'last_played', order = 'desc', search, page = 1, limit = 20 } = req.query;
     
     let sql = `
       SELECT v.*, a.name as author_name, c.name as category_name, ph.play_progress, ph.last_played_at
@@ -1435,6 +1443,7 @@ router.get('/history', (req: Request, res: Response) => {
                       sort === 'size' ? 'v.file_size' :
                       sort === 'author' ? 'a.name' :
                       sort === 'category' ? 'c.name' :
+                      sort === 'last_played' ? 'ph.last_played_at' :
                       'ph.last_played_at';
     const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
     orderClause = ` ORDER BY ${sortField} ${sortOrder}`;

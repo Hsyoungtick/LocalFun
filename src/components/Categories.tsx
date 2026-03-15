@@ -1,6 +1,7 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
 import { getCategories, Category } from '../api';
+import PageLayout from './PageLayout';
 
 export default function Categories() {
   const navigate = useNavigate();
@@ -15,21 +16,14 @@ export default function Categories() {
   }, []);
 
   return (
-    <main className="flex-1 flex flex-col w-full max-w-400 mx-auto px-4 md:px-10 py-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">全部分类</h1>
-      </div>
-
-      {loading ? (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-slate-500">加载中...</div>
-        </div>
-      ) : categories.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-4">
-          <span className="material-symbols-outlined text-6xl text-slate-300">category</span>
-          <div className="text-slate-500">暂无分类</div>
-        </div>
-      ) : (
+    <PageLayout
+      title="全部分类"
+      titleIcon="category"
+      loading={loading}
+      emptyIcon="category"
+      emptyText="暂无分类"
+    >
+      {categories.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           <div
             onClick={() => navigate('/')}
@@ -50,6 +44,6 @@ export default function Categories() {
           ))}
         </div>
       )}
-    </main>
+    </PageLayout>
   );
 }

@@ -8,6 +8,7 @@ interface CustomVideoPlayerProps {
   videoId: number;
   title?: string;
   author?: string;
+  initialProgress?: number;
   onPrev?: () => void;
   onNext?: () => void;
   hasPrev?: boolean;
@@ -25,6 +26,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   videoId,
   title,
   author,
+  initialProgress = 0,
   onPrev,
   onNext,
   hasPrev = false,
@@ -51,6 +53,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   const [spriteError, setSpriteError] = useState(false);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [showVolumeIndicator, setShowVolumeIndicator] = useState(false);
+  const [hasSetInitialProgress, setHasSetInitialProgress] = useState(false);
   
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const volumeIndicatorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -70,6 +73,13 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
     const handleLoadedMetadata = () => {
       if (!durationSeconds) {
         setDuration(video.duration);
+      }
+    };
+    const handleCanPlay = () => {
+      if (!hasSetInitialProgress && initialProgress > 0) {
+        console.log('设置初始播放进度:', initialProgress);
+        video.currentTime = initialProgress;
+        setHasSetInitialProgress(true);
       }
     };
     const handlePlay = () => {
@@ -101,6 +111,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
 
     video.addEventListener('timeupdate', handleTimeUpdate);
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('canplay', handleCanPlay);
     video.addEventListener('play', handlePlay);
     video.addEventListener('pause', handlePause);
     video.addEventListener('ended', handleEnded);
@@ -109,6 +120,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
     return () => {
       video.removeEventListener('timeupdate', handleTimeUpdate);
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('canplay', handleCanPlay);
       video.removeEventListener('play', handlePlay);
       video.removeEventListener('pause', handlePause);
       video.removeEventListener('ended', handleEnded);
@@ -119,7 +131,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
       }
       updatePlayHistory(videoId, video.currentTime).catch(console.error);
     };
-  }, [durationSeconds, videoId]);
+  }, [durationSeconds, videoId, initialProgress, hasSetInitialProgress]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {

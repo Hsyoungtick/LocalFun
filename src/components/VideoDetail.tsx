@@ -263,6 +263,7 @@ export default function VideoDetail() {
               videoId={video.id}
               title={video.title}
               author={authorName}
+              initialProgress={video.playProgress || 0}
               onPrev={handlePrev}
               onNext={handleNext}
               hasPrev={!!prevVideo}
