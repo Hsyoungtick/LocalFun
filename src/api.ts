@@ -14,6 +14,8 @@ export interface Video {
   category: string;
   width?: number;
   height?: number;
+  lastPlayedAt?: string;
+  playProgress?: number;
 }
 
 export interface VideoDetail {
@@ -429,6 +431,75 @@ export async function toggleFavorite(id: number, isFavorite: boolean): Promise<v
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ isFavorite })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 获取收藏的视频列表
+export async function getFavoriteVideos(params?: {
+  sort?: string;
+  order?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}): Promise<{ videos: Video[]; total: number; totalPages: number }> {
+  const searchParams = new URLSearchParams();
+  if (params?.sort) searchParams.set('sort', params.sort);
+  if (params?.order) searchParams.set('order', params.order);
+  if (params?.search) searchParams.set('search', params.search);
+  if (params?.page) searchParams.set('page', params.page.toString());
+  if (params?.limit) searchParams.set('limit', params.limit.toString());
+
+  const response = await fetch(`${API_BASE}/favorites?${searchParams}`);
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 获取历史记录
+export async function getHistoryVideos(params?: {
+  sort?: string;
+  order?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}): Promise<{ videos: Video[]; total: number; totalPages: number }> {
+  const searchParams = new URLSearchParams();
+  if (params?.sort) searchParams.set('sort', params.sort);
+  if (params?.order) searchParams.set('order', params.order);
+  if (params?.search) searchParams.set('search', params.search);
+  if (params?.page) searchParams.set('page', params.page.toString());
+  if (params?.limit) searchParams.set('limit', params.limit.toString());
+
+  const response = await fetch(`${API_BASE}/history?${searchParams}`);
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 清空历史记录
+export async function clearHistory(): Promise<void> {
+  const response = await fetch(`${API_BASE}/history`, {
+    method: 'DELETE'
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 记录观看历史和播放进度
+export async function updatePlayHistory(
+  id: number, 
+  progress: number
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${id}/play-history`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ progress })
   });
   const data = await response.json();
   

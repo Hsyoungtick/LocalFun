@@ -382,7 +382,11 @@ router.post('/videos/:id/favorite', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { isFavorite } = req.body;
+    console.log('切换收藏状态:', { id, isFavorite });
     getDb().prepare('UPDATE videos SET is_favorite = ? WHERE id = ?').run(isFavorite ? 1 : 0, id);
+    // 验证更新是否成功
+    const result = getDb().prepare('SELECT is_favorite FROM videos WHERE id = ?').get(id) as any;
+    console.log('更新后的收藏状态:', result?.is_favorite);
     res.json({ success: true });
   } catch (error) {
     console.error('切换收藏失败:', error);
@@ -1314,6 +1318,214 @@ router.post('/delete-all', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('全部删除失败:', error);
     res.status(500).json({ success: false, error: '全部删除失败' });
+  }
+});
+
+// 获取收藏的视频列表
+router.get('/favorites', (req: Request, res: Response) => {
+  try {
+    const { sort = 'created_at', order = 'desc', search, page = 1, limit = 20 } = req.query;
+    
+    let sql = `
+      SELECT v.*, a.name as author_name, c.name as category_name
+      FROM videos v
+      LEFT JOIN authors a ON v.author_id = a.id
+      LEFT JOIN categories c ON v.category_id = c.id
+      WHERE v.is_favorite = 1
+    `;
+    const params: any[] = [];
+
+    // 搜索
+    if (search) {
+      sql += ' AND v.title LIKE ?';
+      params.push(`%${search}%`);
+    }
+
+    // 排序
+    let orderClause = '';
+    const sortField = sort === 'views' ? 'v.view_count' : 
+                      sort === 'duration' ? 'v.duration' :
+                      sort === 'size' ? 'v.file_size' :
+                      sort === 'author' ? 'a.name' :
+                      sort === 'category' ? 'c.name' :
+                      'v.created_at';
+    const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
+    orderClause = ` ORDER BY ${sortField} ${sortOrder}`;
+    sql += orderClause;
+
+    // 分页
+    const offset = (Number(page) - 1) * Number(limit);
+    sql += ' LIMIT ? OFFSET ?';
+    params.push(Number(limit), offset);
+
+    const videos = getDb().prepare(sql).all(...params) as any[];
+
+    // 获取总数
+    let countSql = `
+      SELECT COUNT(*) as total
+      FROM videos v
+      WHERE v.is_favorite = 1
+    `;
+    const countParams: any[] = [];
+    
+    if (search) {
+      countSql += ' AND v.title LIKE ?';
+      countParams.push(`%${search}%`);
+    }
+
+    const { total } = getDb().prepare(countSql).get(...countParams) as { total: number };
+
+    // 格式化返回数据
+    const formattedVideos = videos.map(v => ({
+      id: v.id,
+      title: v.title,
+      duration: formatDuration(v.duration || 0),
+      durationSeconds: v.duration,
+      author: v.author_name || '未知作者',
+      views: formatViews(v.view_count || 0),
+      viewsCount: v.view_count || 0,
+      time: formatDate(v.file_modified_at || v.created_at),
+      fileSize: formatFileSize(v.file_size || 0),
+      category: v.category_name || '其他',
+      width: v.width,
+      height: v.height
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        videos: formattedVideos,
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / Number(limit))
+      }
+    });
+  } catch (error) {
+    console.error('获取收藏视频失败:', error);
+    res.status(500).json({ success: false, error: '获取收藏视频失败' });
+  }
+});
+
+// 获取观看历史
+router.get('/history', (req: Request, res: Response) => {
+  try {
+    const { sort = 'last_played_at', order = 'desc', search, page = 1, limit = 20 } = req.query;
+    
+    let sql = `
+      SELECT v.*, a.name as author_name, c.name as category_name, ph.play_progress, ph.last_played_at
+      FROM videos v
+      INNER JOIN play_history ph ON v.id = ph.video_id
+      LEFT JOIN authors a ON v.author_id = a.id
+      LEFT JOIN categories c ON v.category_id = c.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    // 搜索
+    if (search) {
+      sql += ' AND v.title LIKE ?';
+      params.push(`%${search}%`);
+    }
+
+    // 排序
+    let orderClause = '';
+    const sortField = sort === 'views' ? 'v.view_count' : 
+                      sort === 'duration' ? 'v.duration' :
+                      sort === 'size' ? 'v.file_size' :
+                      sort === 'author' ? 'a.name' :
+                      sort === 'category' ? 'c.name' :
+                      'ph.last_played_at';
+    const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
+    orderClause = ` ORDER BY ${sortField} ${sortOrder}`;
+    sql += orderClause;
+
+    // 分页
+    const offset = (Number(page) - 1) * Number(limit);
+    sql += ' LIMIT ? OFFSET ?';
+    params.push(Number(limit), offset);
+
+    const videos = getDb().prepare(sql).all(...params) as any[];
+
+    // 获取总数
+    let countSql = `
+      SELECT COUNT(*) as total
+      FROM videos v
+      INNER JOIN play_history ph ON v.id = ph.video_id
+      WHERE 1=1
+    `;
+    const countParams: any[] = [];
+    
+    if (search) {
+      countSql += ' AND v.title LIKE ?';
+      countParams.push(`%${search}%`);
+    }
+
+    const { total } = getDb().prepare(countSql).get(...countParams) as { total: number };
+
+    // 格式化返回数据
+    const formattedVideos = videos.map(v => ({
+      id: v.id,
+      title: v.title,
+      duration: formatDuration(v.duration || 0),
+      durationSeconds: v.duration,
+      author: v.author_name || '未知作者',
+      views: formatViews(v.view_count || 0),
+      viewsCount: v.view_count || 0,
+      time: formatDate(v.file_modified_at || v.created_at),
+      fileSize: formatFileSize(v.file_size || 0),
+      category: v.category_name || '其他',
+      width: v.width,
+      height: v.height,
+      lastPlayedAt: v.last_played_at,
+      playProgress: v.play_progress
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        videos: formattedVideos,
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / Number(limit))
+      }
+    });
+  } catch (error) {
+    console.error('获取历史记录失败:', error);
+    res.status(500).json({ success: false, error: '获取历史记录失败' });
+  }
+});
+
+// 清空历史记录
+router.delete('/history', (req: Request, res: Response) => {
+  try {
+    getDb().prepare('DELETE FROM play_history').run();
+    res.json({ success: true, message: '历史记录已清空' });
+  } catch (error) {
+    console.error('清空历史记录失败:', error);
+    res.status(500).json({ success: false, error: '清空历史记录失败' });
+  }
+});
+
+// 记录观看历史和播放进度
+router.post('/videos/:id/play-history', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { progress } = req.body;
+
+    getDb().prepare(`
+      INSERT INTO play_history (video_id, play_progress, last_played_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(video_id) DO UPDATE SET
+        play_progress = excluded.play_progress,
+        last_played_at = excluded.last_played_at
+    `).run(id, progress || 0);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('更新观看历史失败:', error);
+    res.status(500).json({ success: false, error: '更新观看历史失败' });
   }
 });
 

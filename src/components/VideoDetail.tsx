@@ -126,11 +126,15 @@ export default function VideoDetail() {
     if (!id || !video) return;
     
     const newFavorite = !video.isFavorite;
+    console.log('切换收藏状态:', { id, newFavorite });
     toggleFavorite(parseInt(id), newFavorite)
       .then(() => {
+        console.log('收藏状态更新成功');
         setVideo(prev => prev ? { ...prev, isFavorite: newFavorite } : null);
       })
-      .catch(console.error);
+      .catch((error) => {
+        console.error('收藏状态更新失败:', error);
+      });
   }, [id, video]);
 
   const handleResetVideoData = useCallback(() => {
@@ -306,7 +310,7 @@ export default function VideoDetail() {
                 }`}
               >
                 <span 
-                  className={`material-symbols-outlined transition-colors ${video.isFavorite ? 'text-yellow-500' : 'text-slate-600 dark:text-slate-400 group-hover:text-pink-500'}`}
+                  className={`material-symbols-outlined transition-colors ${video.isFavorite ? 'text-pink-500' : 'text-slate-600 dark:text-slate-400 group-hover:text-pink-500'}`}
                   style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}
                 >
                   star

@@ -5,6 +5,8 @@ interface AppContextType {
   setSelectedCategory: (category: string) => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
+  activeFilter: 'all' | 'favorites' | 'history';
+  setActiveFilter: (filter: 'all' | 'favorites' | 'history') => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -12,9 +14,10 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [selectedCategory, setSelectedCategory] = useState('全部');
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'favorites' | 'history'>('all');
 
   return (
-    <AppContext.Provider value={{ selectedCategory, setSelectedCategory, searchQuery, setSearchQuery }}>
+    <AppContext.Provider value={{ selectedCategory, setSelectedCategory, searchQuery, setSearchQuery, activeFilter, setActiveFilter }}>
       {children}
     </AppContext.Provider>
   );

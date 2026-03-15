@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, MouseEvent, ChangeEvent, forwardRef, useImperativeHandle } from 'react';
+import { updatePlayHistory } from '../api';
 
 interface CustomVideoPlayerProps {
   src: string;
@@ -54,6 +55,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const volumeIndicatorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const seekIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const saveProgressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   const frameCount = 50;
   const cols = 10;
@@ -70,9 +72,28 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
         setDuration(video.duration);
       }
     };
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
-    const handleEnded = () => setIsPlaying(false);
+    const handlePlay = () => {
+      setIsPlaying(true);
+      saveProgressIntervalRef.current = setInterval(() => {
+        updatePlayHistory(videoId, video.currentTime).catch(console.error);
+      }, 10000);
+    };
+    const handlePause = () => {
+      setIsPlaying(false);
+      if (saveProgressIntervalRef.current) {
+        clearInterval(saveProgressIntervalRef.current);
+        saveProgressIntervalRef.current = null;
+      }
+      updatePlayHistory(videoId, video.currentTime).catch(console.error);
+    };
+    const handleEnded = () => {
+      setIsPlaying(false);
+      if (saveProgressIntervalRef.current) {
+        clearInterval(saveProgressIntervalRef.current);
+        saveProgressIntervalRef.current = null;
+      }
+      updatePlayHistory(videoId, video.currentTime).catch(console.error);
+    };
     const handleVolumeChange = () => {
       setVolume(video.volume);
       setIsMuted(video.muted);
@@ -92,8 +113,13 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
       video.removeEventListener('pause', handlePause);
       video.removeEventListener('ended', handleEnded);
       video.removeEventListener('volumechange', handleVolumeChange);
+      
+      if (saveProgressIntervalRef.current) {
+        clearInterval(saveProgressIntervalRef.current);
+      }
+      updatePlayHistory(videoId, video.currentTime).catch(console.error);
     };
-  }, [durationSeconds]);
+  }, [durationSeconds, videoId]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {

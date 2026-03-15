@@ -97,6 +97,19 @@ export async function initDatabase() {
     )
   `);
 
+  // 创建播放历史表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS play_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id INTEGER NOT NULL,
+      play_progress REAL DEFAULT 0,
+      last_played_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (video_id) REFERENCES videos(id),
+      UNIQUE(video_id)
+    )
+  `);
+
   // 不再插入默认分类，只在扫描视频时根据需要创建分类
 
   // 更新现有表结构（向后兼容）

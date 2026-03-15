@@ -1,6 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
-import { getVideos, getCategories, Video, Category, renameVideo } from '../api';
+import { getVideos, getCategories, getFavoriteVideos, getHistoryVideos, Video, Category, renameVideo } from '../api';
 import VideoPreview from './VideoPreview';
 import ContextMenu from './ContextMenu';
 import EditDialog from './EditDialog';
@@ -8,7 +8,7 @@ import { useAppContext } from '../context/AppContext';
 
 export default function Home() {
   const navigate = useNavigate();
-  const { selectedCategory, searchQuery } = useAppContext();
+  const { selectedCategory, searchQuery, activeFilter } = useAppContext();
   const [videos, setVideos] = useState<Video[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,25 +35,49 @@ export default function Home() {
 
   useEffect(() => {
     setPage(1);
-  }, [selectedCategory, searchQuery]);
+  }, [selectedCategory, searchQuery, activeFilter]);
 
   useEffect(() => {
     setLoading(true);
-    getVideos({
-      category: selectedCategory,
-      search: searchQuery || undefined,
-      sort: sortBy,
-      order: sortOrder,
-      page,
-      limit: 20
-    })
-      .then(data => {
+    const fetchVideos = async () => {
+      try {
+        let data;
+        if (activeFilter === 'favorites') {
+          data = await getFavoriteVideos({
+            search: searchQuery || undefined,
+            sort: sortBy,
+            order: sortOrder,
+            page,
+            limit: 20
+          });
+        } else if (activeFilter === 'history') {
+          data = await getHistoryVideos({
+            search: searchQuery || undefined,
+            sort: sortBy,
+            order: sortOrder,
+            page,
+            limit: 20
+          });
+        } else {
+          data = await getVideos({
+            category: selectedCategory,
+            search: searchQuery || undefined,
+            sort: sortBy,
+            order: sortOrder,
+            page,
+            limit: 20
+          });
+        }
         setVideos(data.videos);
         setTotalPages(data.totalPages);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [selectedCategory, searchQuery, sortBy, sortOrder, page]);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchVideos();
+  }, [selectedCategory, searchQuery, sortBy, sortOrder, page, activeFilter]);
 
   const handleTitleContextMenu = (e: React.MouseEvent, video: Video) => {
     e.preventDefault();
@@ -101,14 +125,33 @@ export default function Home() {
         await renameVideo(editDialog.video.id, { newAuthor: newValue });
       }
       setLoading(true);
-      const data = await getVideos({
-        category: selectedCategory,
-        search: searchQuery || undefined,
-        sort: sortBy,
-        order: sortOrder,
-        page,
-        limit: 20
-      });
+      let data;
+      if (activeFilter === 'favorites') {
+        data = await getFavoriteVideos({
+          search: searchQuery || undefined,
+          sort: sortBy,
+          order: sortOrder,
+          page,
+          limit: 20
+        });
+      } else if (activeFilter === 'history') {
+        data = await getHistoryVideos({
+          search: searchQuery || undefined,
+          sort: sortBy,
+          order: sortOrder,
+          page,
+          limit: 20
+        });
+      } else {
+        data = await getVideos({
+          category: selectedCategory,
+          search: searchQuery || undefined,
+          sort: sortBy,
+          order: sortOrder,
+          page,
+          limit: 20
+        });
+      }
       setVideos(data.videos);
       setTotalPages(data.totalPages);
     } catch (error) {
@@ -123,6 +166,11 @@ export default function Home() {
   return (
     <main className="flex-1 flex flex-col w-full max-w-400 mx-auto">
       <div className="flex items-center justify-between px-4 mb-4 pt-4">
+        <div className="flex items-center gap-2">
+          <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+            {activeFilter === 'favorites' ? '我的收藏' : activeFilter === 'history' ? '观看历史' : '全部视频'}
+          </h3>
+        </div>
         <div className="flex items-center gap-2">
           <select
             value={sortBy}
@@ -156,9 +204,15 @@ export default function Home() {
         </div>
       ) : videos.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-4">
-          <span className="material-symbols-outlined text-6xl text-slate-300">video_library</span>
-          <div className="text-slate-500">暂无视频</div>
-          <div className="text-sm text-slate-400">请先添加视频路径并扫描</div>
+          <span className="material-symbols-outlined text-6xl text-slate-300">
+            {activeFilter === 'favorites' ? 'bookmark' : activeFilter === 'history' ? 'history' : 'video_library'}
+          </span>
+          <div className="text-slate-500">
+            {activeFilter === 'favorites' ? '暂无收藏' : activeFilter === 'history' ? '暂无观看历史' : '暂无视频'}
+          </div>
+          <div className="text-sm text-slate-400">
+            {activeFilter === 'favorites' ? '快去收藏喜欢的视频吧' : activeFilter === 'history' ? '观看过的视频会显示在这里' : '请先添加视频路径并扫描'}
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5 p-4">
