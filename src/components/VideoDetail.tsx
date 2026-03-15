@@ -209,7 +209,7 @@ export default function VideoDetail() {
   const authorDescription = video.author?.description;
 
   return (
-    <main className="flex-1 flex flex-col gap-4 px-4 md:px-20 py-6 max-w-[1600px] mx-auto w-full">
+    <main className="flex-1 flex flex-col gap-4 px-4 md:px-20 py-6 max-w-400 mx-auto w-full">
       {/* 第一行：视频信息（左）+ 作者信息（右） */}
       <div className="flex flex-col md:flex-row gap-4 md:gap-6">
         {/* 左侧：视频信息 */}
@@ -280,7 +280,7 @@ export default function VideoDetail() {
                   console.log('Adding favorite frame at time:', currentTime);
                   handleAddFavoriteFrame(currentTime);
                 }}
-                className="flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all group"
+                className="flex items-center justify-center w-21 h-15 rounded-lg transition-all group"
               >
                 <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>thumb_up</span>
                 {video.favoriteFramesCount > 0 && (
@@ -292,7 +292,7 @@ export default function VideoDetail() {
 
               <button
                 onClick={handleLike}
-                className="flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all group"
+                className="flex items-center justify-center w-21 h-15 rounded-lg transition-all group"
               >
                 <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>favorite</span>
                 {video.likeCount > 0 && (
@@ -304,7 +304,7 @@ export default function VideoDetail() {
 
               <button
                 onClick={handleToggleFavorite}
-                className={`flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all ${
+                className={`flex items-center justify-center w-21 h-15 rounded-lg transition-all ${
                   video.isFavorite 
                     ? '' 
                     : 'group'
@@ -320,7 +320,7 @@ export default function VideoDetail() {
 
               <button
                 onClick={() => setShowMoveDialog(true)}
-                className="flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all group"
+                className="flex items-center justify-center w-21 h-15 rounded-lg transition-all group"
               >
                 <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>drive_file_move</span>
               </button>
@@ -332,7 +332,7 @@ export default function VideoDetail() {
                   handleResetVideoData();
                 }
               }}
-              className="flex items-center justify-center w-[84px] h-[60px] rounded-lg transition-all group"
+              className="flex items-center justify-center w-21 h-15 rounded-lg transition-all group"
             >
               <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-red-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>restart_alt</span>
             </button>
@@ -343,7 +343,7 @@ export default function VideoDetail() {
         <div className="w-full md:w-1/4 flex flex-col">
           <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm flex flex-col overflow-hidden max-h-[calc((100vw-1rem)*9/16)] md:max-h-[calc((75vw-1rem)*9/16)]">
             {/* 标签导航 */}
-            <div className="flex gap-1 mb-4 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg flex-shrink-0">
+            <div className="flex gap-1 mb-4 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg shrink-0">
               <button
                 onClick={() => setActiveTab('frames')}
                 className={`flex-1 px-2 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap overflow-hidden text-ellipsis ${
@@ -402,7 +402,7 @@ export default function VideoDetail() {
                               }
                             }}
                           />
-                          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2">
+                          <div className="absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/70 to-transparent p-2">
                             <span className="text-xs text-white font-medium">
                               {Math.floor(frame.timeSeconds / 60)}:{Math.floor(frame.timeSeconds % 60).toString().padStart(2, '0')}
                             </span>

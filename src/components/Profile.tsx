@@ -119,7 +119,7 @@ export default function Profile() {
   }
 
   return (
-    <main className="flex-1 max-w-[1280px] mx-auto w-full px-0 lg:px-4">
+    <main className="flex-1 max-w-7xl mx-auto w-full px-0 lg:px-4">
       {/* 作者头部 */}
       <div className="bg-white dark:bg-slate-900 p-4 lg:rounded-xl shadow-sm">
         <div className="flex flex-col gap-4">

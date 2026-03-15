@@ -381,12 +381,12 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
       {showControls && (
         <>
           {/* 底部渐变 */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-linear-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
           
           {/* 全屏时的顶部渐变和标题 */}
           {isFullscreen && (
             <>
-              <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-transparent pointer-events-none" />
+              <div className="absolute inset-0 bg-linear-to-b from-black/50 via-transparent to-transparent pointer-events-none" />
               <div className="absolute top-4 left-4 text-left pointer-events-none z-10">
                 {title && (
                   <div className="text-white text-lg font-bold mb-1 drop-shadow-lg line-clamp-2 max-w-md">

@@ -36,7 +36,13 @@ function loadGlobalProgress(): GlobalProgress | null {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_GLOBAL);
     if (saved) {
-      return JSON.parse(saved);
+      const progress = JSON.parse(saved);
+      // 如果进度已完成或出错，不加载
+      if (progress.status === 'completed' || progress.status === 'error') {
+        localStorage.removeItem(STORAGE_KEY_GLOBAL);
+        return null;
+      }
+      return progress;
     }
   } catch (e) {
     console.error('加载进度失败:', e);
@@ -67,7 +73,25 @@ function loadPathProgress(): Record<number, PathProgress> {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_PATHS);
     if (saved) {
-      return JSON.parse(saved);
+      const progress = JSON.parse(saved);
+      // 只保留未完成的进度
+      const validProgress: Record<number, PathProgress> = {};
+      let hasActiveProgress = false;
+      
+      Object.entries(progress).forEach(([pathId, p]: [string, any]) => {
+        if (p.status !== 'idle' && p.status !== 'completed' && p.status !== 'error') {
+          validProgress[parseInt(pathId)] = p;
+          hasActiveProgress = true;
+        }
+      });
+      
+      // 如果没有有效的进度，清除localStorage
+      if (!hasActiveProgress) {
+        localStorage.removeItem(STORAGE_KEY_PATHS);
+        return {};
+      }
+      
+      return validProgress;
     }
   } catch (e) {
     console.error('加载路径进度失败:', e);
@@ -113,16 +137,33 @@ export default function Settings() {
     loadPaths();
     loadStats();
     
-    // 如果有未完成的进度，继续轮询
+    // 清除已完成或错误的路径进度
+    const validPathProgress: Record<number, PathProgress> = {};
+    let hasActiveProgress = false;
+    
+    Object.entries(pathProgress).forEach(([pathId, progress]: [string, PathProgress]) => {
+      if (progress.status !== 'idle' && progress.status !== 'completed' && progress.status !== 'error') {
+        validPathProgress[parseInt(pathId)] = progress;
+        hasActiveProgress = true;
+      }
+    });
+    
+    // 如果有无效的进度，更新状态
+    if (Object.keys(validPathProgress).length !== Object.keys(pathProgress).length) {
+      setPathProgress(validPathProgress);
+      if (!hasActiveProgress) {
+        clearPathProgress();
+      }
+    }
+    
+    // 如果有未完成的全局进度，继续轮询
     if (globalProgress.status !== 'idle' && globalProgress.status !== 'completed' && globalProgress.status !== 'error') {
       startProgressPolling();
     }
     
-    // 检查路径进度是否有未完成的
-    Object.entries(pathProgress).forEach(([pathId, progress]: [string, PathProgress]) => {
-      if (progress.status !== 'idle' && progress.status !== 'completed' && progress.status !== 'error') {
-        startProgressPolling(parseInt(pathId));
-      }
+    // 如果有未完成的路径进度，继续轮询
+    Object.entries(validPathProgress).forEach(([pathId, progress]: [string, PathProgress]) => {
+      startProgressPolling(parseInt(pathId));
     });
   }, []);
 

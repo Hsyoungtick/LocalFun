@@ -706,6 +706,22 @@ router.delete('/paths/:id', (req: Request, res: Response) => {
       WHERE file_path LIKE ? OR file_path LIKE ?
     `).all(`${normalizedPath}%`, `${pathValue}%`) as any[];
     
+    // 删除该路径视频的相关数据
+    if (videos.length > 0) {
+      const videoIds = videos.map(v => v.id);
+      const placeholders = videoIds.map(() => '?').join(',');
+      
+      // 删除喜欢的帧
+      getDb().prepare(`
+        DELETE FROM favorite_frames WHERE video_id IN (${placeholders})
+      `).run(...videoIds);
+      
+      // 删除播放历史
+      getDb().prepare(`
+        DELETE FROM play_history WHERE video_id IN (${placeholders})
+      `).run(...videoIds);
+    }
+    
     // 删除封面和精灵图
     const coversDir = path.join(process.cwd(), 'data', 'covers');
     const previewsDir = path.join(process.cwd(), 'data', 'previews');
@@ -931,12 +947,14 @@ router.get('/stream/:id', (req: Request, res: Response) => {
     const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(id) as any;
     
     if (!video) {
+      console.log('视频不存在:', id);
       return res.status(404).json({ success: false, error: '视频不存在' });
     }
 
     const filePath = video.file_path;
     
     if (!fs.existsSync(filePath)) {
+      console.log('视频文件不存在:', filePath);
       return res.status(404).json({ success: false, error: '视频文件不存在' });
     }
 
@@ -1093,12 +1111,16 @@ router.post('/rescan-all', async (req: Request, res: Response) => {
     getDb().exec('DELETE FROM videos');
     getDb().exec('DELETE FROM authors');
     getDb().exec('DELETE FROM categories');
+    getDb().exec('DELETE FROM favorite_frames');
+    getDb().exec('DELETE FROM play_history');
     getDb().exec('DELETE FROM video_paths');
     
     // 重置自增计数器
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='videos'");
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='authors'");
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='categories'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='favorite_frames'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='play_history'");
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='video_paths'");
     
     // 不再插入默认分类，只在扫描视频时根据需要创建分类
@@ -1304,12 +1326,16 @@ router.post('/delete-all', async (req: Request, res: Response) => {
     getDb().exec('DELETE FROM videos');
     getDb().exec('DELETE FROM authors');
     getDb().exec('DELETE FROM categories');
+    getDb().exec('DELETE FROM favorite_frames');
+    getDb().exec('DELETE FROM play_history');
     getDb().exec('DELETE FROM video_paths');
     
     // 重置自增计数器
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='videos'");
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='authors'");
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='categories'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='favorite_frames'");
+    getDb().exec("DELETE FROM sqlite_sequence WHERE name='play_history'");
     getDb().exec("DELETE FROM sqlite_sequence WHERE name='video_paths'");
     
     // 不再插入默认分类，只在扫描视频时根据需要创建分类

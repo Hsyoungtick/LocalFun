@@ -93,7 +93,7 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
       {/* 非悬浮时的底部渐变和元素 */}
       {!isHovering && (
         <>
-          <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
+          <div className="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/70 to-transparent pointer-events-none" />
           {/* 播放量 - 左下角 */}
           {views && (
             <div className="absolute bottom-1.5 left-2 flex items-center gap-0.5 text-white text-[10px] font-bold leading-none pointer-events-none z-10">
@@ -146,7 +146,7 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
           )}
 
           {/* 底部渐变 */}
-          <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
+          <div className="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/70 to-transparent pointer-events-none" />
 
           {/* 时间指示器 */}
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
