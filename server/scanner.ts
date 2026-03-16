@@ -1,9 +1,98 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { getDb } from './database';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts'];
+
+const PARALLEL_LIMIT = 16;
+
+function processInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  processor: (item: T) => Promise<R>,
+  onProgress?: (completed: number, total: number) => void
+): Promise<R[]> {
+  return new Promise((resolve) => {
+    const results: R[] = [];
+    let currentIndex = 0;
+    
+    const processBatch = async () => {
+      const batch: T[] = [];
+      for (let i = 0; i < batchSize && currentIndex < items.length; i++) {
+        batch.push(items[currentIndex++]);
+      }
+      
+      if (batch.length === 0) {
+        resolve(results);
+        return;
+      }
+      
+      const promises = batch.map(item => processor(item));
+      const batchResults = await Promise.all(promises);
+      results.push(...batchResults);
+      
+      if (onProgress) {
+        onProgress(currentIndex, items.length);
+      }
+      
+      if (currentIndex < items.length) {
+        processBatch();
+      } else {
+        resolve(results);
+      }
+    };
+    
+    processBatch();
+  });
+}
+
+// 全局ffmpeg进程管理
+const activeFfmpegProcesses = new Set<ChildProcess>();
+
+// 注册ffmpeg进程
+function registerFfmpegProcess(proc: ChildProcess): ChildProcess {
+  activeFfmpegProcesses.add(proc);
+  proc.on('close', () => {
+    activeFfmpegProcesses.delete(proc);
+  });
+  proc.on('error', () => {
+    activeFfmpegProcesses.delete(proc);
+  });
+  return proc;
+}
+
+// 等待所有ffmpeg进程完成
+export async function waitForAllFfmpegProcesses(timeout: number = 5000): Promise<void> {
+  const startTime = Date.now();
+  
+  // 先等待进程自然完成
+  while (activeFfmpegProcesses.size > 0 && Date.now() - startTime < timeout) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  
+  // 如果超时后还有进程，强制终止
+  if (activeFfmpegProcesses.size > 0) {
+    const { execSync } = require('child_process');
+    try {
+      if (process.platform === 'win32') {
+        execSync('taskkill /F /IM ffmpeg.exe', { encoding: 'utf8' });
+      } else {
+        execSync('pkill -9 ffmpeg', { encoding: 'utf8' });
+      }
+    } catch (error) {
+      // 忽略错误
+    }
+    
+    // 清空进程列表
+    activeFfmpegProcesses.clear();
+  }
+}
+
+// 获取活跃的ffmpeg进程数量
+export function getActiveFfmpegCount(): number {
+  return activeFfmpegProcesses.size;
+}
 
 // 扫描进度状态
 export interface ScanProgress {
@@ -17,16 +106,187 @@ export interface ScanProgress {
   videoCount: number; // 已导入的视频数
 }
 
-export const scanProgress: ScanProgress = {
-  status: 'idle',
-  current: 0,
-  total: 0,
-  currentFile: '',
-  message: '',
-  startTime: 0,
-  phase: '',
-  videoCount: 0
-};
+// 使用Map存储每个路径的独立进度
+const progressMap = new Map<number | undefined, ScanProgress>();
+
+// 停止扫描的标志
+const stopScanFlags = new Map<number | undefined, boolean>();
+
+// 获取指定路径的进度对象
+export function getScanProgress(pathId?: number): ScanProgress {
+  if (!progressMap.has(pathId)) {
+    progressMap.set(pathId, {
+      status: 'idle',
+      current: 0,
+      total: 0,
+      currentFile: '',
+      message: '',
+      startTime: 0,
+      phase: '',
+      videoCount: 0
+    });
+  }
+  return progressMap.get(pathId)!;
+}
+
+// 为了兼容性，保留scanProgress导出（指向全局进度）
+export const scanProgress: ScanProgress = getScanProgress(undefined);
+
+// 当前正在扫描的路径ID
+let currentScanPathId: number | undefined;
+let progressSaveInterval: NodeJS.Timeout | null = null;
+
+// 开始自动保存进度
+export function startProgressAutoSave(pathId?: number): void {
+  currentScanPathId = pathId;
+  stopScanFlags.set(pathId, false); // 重置停止标志
+  if (progressSaveInterval) {
+    clearInterval(progressSaveInterval);
+  }
+  progressSaveInterval = setInterval(() => {
+    const progress = getScanProgress(currentScanPathId);
+    saveScanProgressToDb(progress, currentScanPathId);
+  }, 500);
+}
+
+// 停止自动保存进度
+export function stopProgressAutoSave(): void {
+  if (progressSaveInterval) {
+    clearInterval(progressSaveInterval);
+    progressSaveInterval = null;
+  }
+  const progress = getScanProgress(currentScanPathId);
+  saveScanProgressToDb(progress, currentScanPathId);
+}
+
+// 停止扫描
+export function stopScan(pathId?: number): void {
+  // 设置停止标志
+  stopScanFlags.set(pathId, true);
+  // 同时设置全局标志，确保批量扫描也能停止
+  stopScanFlags.set(undefined, true);
+  
+  const progress = getScanProgress(pathId);
+  progress.status = 'idle';
+  progress.phase = '';
+  progress.current = 0;
+  progress.total = 0;
+  progress.currentFile = '';
+  progress.videoCount = 0;
+  saveScanProgressToDb(progress, pathId);
+}
+
+// 清除停止标志
+export function clearStopScanFlags(pathId?: number): void {
+  stopScanFlags.delete(pathId);
+  stopScanFlags.delete(undefined);
+}
+
+// 检查是否应该停止扫描
+export function shouldStopScan(pathId?: number): boolean {
+  // 检查全局停止标志
+  if (stopScanFlags.get(undefined)) {
+    return true;
+  }
+  // 检查特定路径的停止标志
+  if (pathId !== undefined && stopScanFlags.get(pathId)) {
+    return true;
+  }
+  return false;
+}
+
+// 从数据库加载扫描进度
+export function loadScanProgressFromDb(pathId?: number): ScanProgress {
+  try {
+    let progress;
+    if (pathId) {
+      progress = getDb().prepare('SELECT * FROM scan_progress WHERE path_id = ?').get(pathId) as any;
+    } else {
+      progress = getDb().prepare('SELECT * FROM scan_progress WHERE path_id IS NULL ORDER BY id DESC LIMIT 1').get() as any;
+    }
+    
+    if (progress) {
+      return {
+        status: progress.status as any,
+        current: progress.current,
+        total: progress.total,
+        currentFile: progress.current_file,
+        message: progress.message,
+        startTime: progress.start_time,
+        phase: progress.phase,
+        videoCount: progress.video_count
+      };
+    }
+  } catch (e) {
+    console.error('加载扫描进度失败:', e);
+  }
+  return {
+    status: 'idle',
+    current: 0,
+    total: 0,
+    currentFile: '',
+    message: '',
+    startTime: 0,
+    phase: '',
+    videoCount: 0
+  };
+}
+
+// 保存扫描进度到数据库
+export function saveScanProgressToDb(progress: ScanProgress, pathId?: number): void {
+  try {
+    const now = Date.now();
+    if (pathId) {
+      getDb().prepare(`
+        INSERT OR REPLACE INTO scan_progress 
+        (path_id, status, current, total, current_file, message, start_time, phase, video_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        pathId,
+        progress.status,
+        progress.current,
+        progress.total,
+        progress.currentFile,
+        progress.message,
+        progress.startTime,
+        progress.phase,
+        progress.videoCount,
+        now
+      );
+    } else {
+      getDb().prepare(`
+        INSERT OR REPLACE INTO scan_progress 
+        (path_id, status, current, total, current_file, message, start_time, phase, video_count, updated_at)
+        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        progress.status,
+        progress.current,
+        progress.total,
+        progress.currentFile,
+        progress.message,
+        progress.startTime,
+        progress.phase,
+        progress.videoCount,
+        now
+      );
+    }
+  } catch (e) {
+    console.error('保存扫描进度失败:', e);
+  }
+}
+
+// 清除扫描进度
+export function clearScanProgressFromDb(pathId?: number): void {
+  try {
+    if (pathId) {
+      getDb().prepare('DELETE FROM scan_progress WHERE path_id = ?').run(pathId);
+    } else {
+      getDb().prepare('DELETE FROM scan_progress WHERE path_id IS NULL').run();
+    }
+  } catch (e) {
+    console.error('清除扫描进度失败:', e);
+  }
+}
 
 // 获取数据目录路径
 const dataDir = path.join(process.cwd(), 'data');
@@ -193,7 +453,7 @@ export function generateThumbnail(filePath: string, videoId: number, duration?: 
     const timestamp = duration && duration > 0 ? duration / 2 : 5;
     
     // 关键优化：-ss 放在 -i 之前，实现快速seek
-    const ffmpeg = spawn('ffmpeg', [
+    const ffmpeg = registerFfmpegProcess(spawn('ffmpeg', [
       '-y',
       '-ss', timestamp.toString(),
       '-i', filePath,
@@ -202,7 +462,7 @@ export function generateThumbnail(filePath: string, videoId: number, duration?: 
       '-vf', 'scale=320:-1',
       '-an',
       thumbnailPath
-    ]);
+    ]));
 
     ffmpeg.on('close', (code) => {
       if (code === 0 && fs.existsSync(thumbnailPath)) {
@@ -246,7 +506,7 @@ export async function generateSprite(filePath: string, videoId: number, duration
     promises.push(new Promise<void>((resolve) => {
       // 关键优化：-ss 在 -i 之前，快速seek到目标位置
       // 使用 pad 滤镜填充黑边，保持比例
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = registerFfmpegProcess(spawn('ffmpeg', [
         '-y',
         '-ss', String(timestamp.toFixed(2)),
         '-i', filePath,
@@ -256,7 +516,7 @@ export async function generateSprite(filePath: string, videoId: number, duration
         '-an',
         '-threads', '1',
         tempPath
-      ]);
+      ]));
       
       ffmpeg.on('close', () => resolve());
       ffmpeg.on('error', () => resolve());
@@ -289,7 +549,7 @@ export async function generateSprite(filePath: string, videoId: number, duration
     const outputWidth = frameWidth * actualCols;
     const outputHeight = frameHeight * actualRows;
 
-    const ffmpeg = spawn('ffmpeg', [
+    const ffmpeg = registerFfmpegProcess(spawn('ffmpeg', [
       '-y',
       '-f', 'concat',
       '-safe', '0',
@@ -298,7 +558,7 @@ export async function generateSprite(filePath: string, videoId: number, duration
       '-frames:v', '1',
       '-q:v', '2',
       spritePath
-    ]);
+    ]));
 
     ffmpeg.on('close', (code) => {
       // 清理临时文件
@@ -349,6 +609,59 @@ export async function scanDirectory(dirPath: string): Promise<string[]> {
 
   await scan(dirPath);
   return videos;
+}
+
+// 递归查找包含视频文件的文件夹（到最深层）
+export function findVideoFolders(dirPath: string): string[] {
+  const videoFolders: string[] = [];
+  
+  function scan(dir: string): boolean {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      let hasVideo = false;
+      const subDirs: string[] = [];
+      
+      for (const entry of entries) {
+        if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (VIDEO_EXTENSIONS.includes(ext)) {
+            hasVideo = true;
+          }
+        } else if (entry.isDirectory()) {
+          subDirs.push(path.join(dir, entry.name));
+        }
+      }
+      
+      // 如果当前目录有视频，检查子目录是否也有视频
+      if (hasVideo) {
+        let childHasVideo = false;
+        for (const subDir of subDirs) {
+          if (scan(subDir)) {
+            childHasVideo = true;
+          }
+        }
+        // 如果子目录没有视频，则当前目录是最深层的视频文件夹
+        if (!childHasVideo) {
+          videoFolders.push(dir);
+        }
+        return true;
+      } else {
+        // 当前目录没有视频，继续扫描子目录
+        let found = false;
+        for (const subDir of subDirs) {
+          if (scan(subDir)) {
+            found = true;
+          }
+        }
+        return found;
+      }
+    } catch (e) {
+      return false;
+    }
+  }
+  
+  scan(dirPath);
+  return videoFolders;
 }
 
 // 从标题开头提取作者名（【作者名】格式）
@@ -458,103 +771,143 @@ export async function generateSpriteForVideo(videoId: number): Promise<void> {
 }
 
 // 扫描并添加所有视频（带进度更新）
-export async function scanAndAddVideos(dirPath: string, updateProgress: boolean = false): Promise<{ added: number; skipped: number; failed: number; videoIds: number[] }> {
+export async function scanAndAddVideos(dirPath: string, pathId?: number): Promise<{ added: number; skipped: number; failed: number; videoIds: number[] }> {
+  // 只清除特定路径的停止标志，不清除全局标志
+  stopScanFlags.delete(pathId);
+  
   const videos = await scanDirectory(dirPath);
-  let added = 0;
+  
+  const progress = getScanProgress(pathId);
+  progress.total = videos.length;
+  progress.status = 'scanning';
+  progress.phase = `扫描视频文件(0/${videos.length})...`;
+  progress.startTime = Date.now();
+  progress.videoCount = 0;
+  saveScanProgressToDb(progress, pathId);
+
+  const newVideos: string[] = [];
   let skipped = 0;
-  let failed = 0;
-  const videoIds: number[] = [];
-
-  if (updateProgress) {
-    scanProgress.total = videos.length;
-    scanProgress.status = 'scanning';
-    scanProgress.phase = '扫描视频文件...';
-    scanProgress.startTime = Date.now();
-  }
-
+  
   for (let i = 0; i < videos.length; i++) {
-    const videoPath = videos[i];
-    
-    if (updateProgress) {
-      scanProgress.current = i + 1;
-      scanProgress.currentFile = path.basename(videoPath);
-      scanProgress.message = path.basename(videoPath);
+    if (shouldStopScan(pathId)) {
+      return { added: 0, skipped: i, failed: 0, videoIds: [] };
     }
+    
+    progress.current = i + 1;
+    progress.currentFile = path.basename(videos[i]);
+    progress.phase = `扫描视频文件(${i + 1}/${videos.length})...`;
 
-    const existing = getDb().prepare('SELECT id FROM videos WHERE file_path = ?').get(videoPath);
+    const existing = getDb().prepare('SELECT id FROM videos WHERE file_path = ?').get(videos[i]);
     if (existing) {
       skipped++;
-      continue;
-    }
-    
-    const result = await addVideoToDatabase(videoPath);
-    if (result === null) {
-      failed++;
     } else {
-      added++;
-      videoIds.push(result);
+      newVideos.push(videos[i]);
     }
   }
+
+  if (newVideos.length === 0) {
+    return { added: 0, skipped, failed: 0, videoIds: [] };
+  }
+
+  const results = await processInBatches(
+    newVideos,
+    PARALLEL_LIMIT,
+    async (videoPath: string) => {
+      const videoId = await addVideoToDatabase(videoPath);
+      return videoId;
+    },
+    (completed, total) => {
+      progress.current = completed;
+      progress.phase = `导入视频(${completed}/${total})...`;
+    }
+  );
+
+  const added = results.filter(r => r !== null).length;
+  const videoIds = results.filter(r => r !== null) as number[];
+  const failed = newVideos.length - added;
 
   return { added, skipped, failed, videoIds };
 }
 
 // 刷新所有已配置路径的视频（带进度更新）
 export async function refreshAllVideos(): Promise<{ added: number; total: number }> {
-  const paths = getDb().prepare('SELECT path FROM video_paths WHERE enabled = 1').all() as { path: string }[];
+  // 清除全局停止标志
+  stopScanFlags.delete(undefined);
+  
+  const paths = getDb().prepare('SELECT id, path FROM video_paths WHERE enabled = 1').all() as { id: number; path: string }[];
   let totalAdded = 0;
   let totalVideos = 0;
   const allVideoIds: number[] = [];
 
-  // 计算总视频数
-  let totalFiles = 0;
-  for (const { path: dirPath } of paths) {
-    if (fs.existsSync(dirPath)) {
-      const videos = await scanDirectory(dirPath);
-      totalFiles += videos.length;
-    }
+  // 先设置所有路径为"排队中"状态
+  for (const { id: pathId } of paths) {
+    const progress = getScanProgress(pathId);
+    progress.status = 'scanning';
+    progress.phase = '排队中...';
+    progress.current = 0;
+    progress.total = 0;
+    progress.videoCount = 0;
+    saveScanProgressToDb(progress, pathId);
   }
 
-  scanProgress.total = totalFiles;
-  scanProgress.current = 0;
-  scanProgress.status = 'scanning';
-  scanProgress.phase = '扫描视频文件...';
-  scanProgress.message = '';
-  scanProgress.startTime = Date.now();
-  scanProgress.videoCount = 0;
-
   // 第一阶段：扫描所有路径，生成封面
-  for (const { path: dirPath } of paths) {
+  for (let i = 0; i < paths.length; i++) {
+    const { id: pathId, path: dirPath } = paths[i];
+    
+    // 检查是否应该停止扫描
+    if (shouldStopScan(undefined)) {
+      return { added: totalAdded, total: totalVideos };
+    }
+    
     if (fs.existsSync(dirPath)) {
-      const result = await scanAndAddVideos(dirPath, true);
+      const result = await scanAndAddVideos(dirPath, pathId);
       totalAdded += result.added;
       totalVideos += result.added + result.skipped;
       allVideoIds.push(...result.videoIds);
-      scanProgress.videoCount += result.added;
+      
+      // 更新该路径的进度（记录添加的视频数）
+      const progress = getScanProgress(pathId);
+      progress.videoCount = result.added;
+      saveScanProgressToDb(progress, pathId);
     }
   }
 
-  // 第二阶段：生成所有精灵图
+  // 第二阶段：生成所有精灵图（按路径分组）
   if (allVideoIds.length > 0) {
-    scanProgress.status = 'generating_previews';
-    scanProgress.phase = '生成精灵图...';
-    scanProgress.total = allVideoIds.length;
-    scanProgress.current = 0;
-
-    for (let i = 0; i < allVideoIds.length; i++) {
-      scanProgress.current = i + 1;
-      const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(allVideoIds[i]) as any;
+    // 按路径分组视频ID
+    const videosByPath = new Map<number, number[]>();
+    for (const videoId of allVideoIds) {
+      const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(videoId) as any;
       if (video) {
-        scanProgress.currentFile = path.basename(video.file_path);
-        scanProgress.message = path.basename(video.file_path);
+        // 找到该视频所属的路径ID
+        for (const { id: pathId, path: dirPath } of paths) {
+          if (video.file_path.startsWith(dirPath)) {
+            if (!videosByPath.has(pathId)) {
+              videosByPath.set(pathId, []);
+            }
+            videosByPath.get(pathId)!.push(videoId);
+            break;
+          }
+        }
       }
-      await generateSpriteForVideo(allVideoIds[i]);
+    }
+
+    // 标记所有路径完成
+    for (const { id: pathId } of paths) {
+      const progress = getScanProgress(pathId);
+      progress.status = 'completed';
+      progress.phase = `已完成(${progress.videoCount}个视频)`;
+      saveScanProgressToDb(progress, pathId);
+    }
+  } else {
+    // 如果没有新视频，标记所有路径为完成
+    for (const { id: pathId } of paths) {
+      const progress = getScanProgress(pathId);
+      progress.status = 'completed';
+      progress.phase = '已完成(0个视频)';
+      saveScanProgressToDb(progress, pathId);
     }
   }
-
-  scanProgress.status = 'completed';
-  scanProgress.phase = `已完成（${scanProgress.videoCount} 个视频）`;
-  scanProgress.message = '';
 
   // 获取总视频数
   const count = getDb().prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };

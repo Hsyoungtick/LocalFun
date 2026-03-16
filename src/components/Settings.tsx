@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getVideoPaths, addVideoPath, deleteVideoPath, scanVideos, getStats, getScanProgress, rescanVideos, rescanAll, deleteAll, VideoPath } from '../api';
+import { getVideoPaths, addVideoPath, deleteVideoPath, clearVideoPath, scanVideos, getStats, getScanProgress, VideoPath, stopScan, updateVideoPath, generatePreviews } from '../api';
 
 interface PathProgress {
   status: string;
@@ -7,105 +7,6 @@ interface PathProgress {
   total: number;
   phase: string;
   videoCount: number;
-}
-
-interface GlobalProgress {
-  status: string;
-  current: number;
-  total: number;
-  phase: string;
-  videoCount: number;
-  importingPath: string | null;
-}
-
-// localStorage 键名
-const STORAGE_KEY_GLOBAL = 'import_global_progress';
-const STORAGE_KEY_PATHS = 'import_path_progress';
-
-// 保存全局进度到 localStorage
-function saveGlobalProgress(progress: GlobalProgress) {
-  try {
-    localStorage.setItem(STORAGE_KEY_GLOBAL, JSON.stringify(progress));
-  } catch (e) {
-    console.error('保存进度失败:', e);
-  }
-}
-
-// 从 localStorage 加载全局进度
-function loadGlobalProgress(): GlobalProgress | null {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY_GLOBAL);
-    if (saved) {
-      const progress = JSON.parse(saved);
-      // 如果进度已完成或出错，不加载
-      if (progress.status === 'completed' || progress.status === 'error') {
-        localStorage.removeItem(STORAGE_KEY_GLOBAL);
-        return null;
-      }
-      return progress;
-    }
-  } catch (e) {
-    console.error('加载进度失败:', e);
-  }
-  return null;
-}
-
-// 清除全局进度
-function clearGlobalProgress() {
-  try {
-    localStorage.removeItem(STORAGE_KEY_GLOBAL);
-  } catch (e) {
-    console.error('清除进度失败:', e);
-  }
-}
-
-// 保存路径进度到 localStorage
-function savePathProgress(progress: Record<number, PathProgress>) {
-  try {
-    localStorage.setItem(STORAGE_KEY_PATHS, JSON.stringify(progress));
-  } catch (e) {
-    console.error('保存路径进度失败:', e);
-  }
-}
-
-// 从 localStorage 加载路径进度
-function loadPathProgress(): Record<number, PathProgress> {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY_PATHS);
-    if (saved) {
-      const progress = JSON.parse(saved);
-      // 只保留未完成的进度
-      const validProgress: Record<number, PathProgress> = {};
-      let hasActiveProgress = false;
-      
-      Object.entries(progress).forEach(([pathId, p]: [string, any]) => {
-        if (p.status !== 'idle' && p.status !== 'completed' && p.status !== 'error') {
-          validProgress[parseInt(pathId)] = p;
-          hasActiveProgress = true;
-        }
-      });
-      
-      // 如果没有有效的进度，清除localStorage
-      if (!hasActiveProgress) {
-        localStorage.removeItem(STORAGE_KEY_PATHS);
-        return {};
-      }
-      
-      return validProgress;
-    }
-  } catch (e) {
-    console.error('加载路径进度失败:', e);
-  }
-  return {};
-}
-
-// 清除路径进度
-function clearPathProgress() {
-  try {
-    localStorage.removeItem(STORAGE_KEY_PATHS);
-  } catch (e) {
-    console.error('清除路径进度失败:', e);
-  }
 }
 
 export default function Settings() {
@@ -117,140 +18,159 @@ export default function Settings() {
     totalSize: '0'
   });
   const [newPath, setNewPath] = useState('');
-  const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ added: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   
-  // 全局进度状态 - 从 localStorage 恢复
-  const [globalProgress, setGlobalProgress] = useState<GlobalProgress>(() => {
-    const saved = loadGlobalProgress();
-    return saved || { status: 'idle', current: 0, total: 0, phase: '', videoCount: 0, importingPath: null };
-  });
+  // 每个路径的进度状态
+  const [pathProgress, setPathProgress] = useState<Record<number, PathProgress>>({});
+  // 每个路径是否暂停
+  const [pausedPaths, setPausedPaths] = useState<Set<number>>(new Set());
+  // 预览图生成是否暂停
+  const [previewPausedPaths, setPreviewPausedPaths] = useState<Set<number>>(new Set());
   
-  // 每个路径的进度状态 - 从 localStorage 恢复
-  const [pathProgress, setPathProgress] = useState<Record<number, PathProgress>>(() => loadPathProgress());
+  const progressIntervals = useRef<Map<number, NodeJS.Timeout>>(new Map());
   
-  const progressInterval = useRef<NodeJS.Timeout | null>(null);
+  // 判断是否有任何路径正在导入（不包括暂停的）
+  const isAnyPathImporting = Object.values(pathProgress).some(
+    (p: PathProgress) => p.status === 'scanning' || p.status === 'generating_previews'
+  ) && pausedPaths.size === 0;
+  
+  // 判断是否有任何路径正在扫描（不包括暂停的）
+  const isAnyPathScanning = Object.values(pathProgress).some(
+    (p: PathProgress) => p.status === 'scanning' || p.status === 'generating_previews'
+  );
 
   useEffect(() => {
     loadPaths();
     loadStats();
-    
-    // 清除已完成或错误的路径进度
-    const validPathProgress: Record<number, PathProgress> = {};
-    let hasActiveProgress = false;
-    
-    Object.entries(pathProgress).forEach(([pathId, progress]: [string, PathProgress]) => {
-      if (progress.status !== 'idle' && progress.status !== 'completed' && progress.status !== 'error') {
-        validPathProgress[parseInt(pathId)] = progress;
-        hasActiveProgress = true;
-      }
-    });
-    
-    // 如果有无效的进度，更新状态
-    if (Object.keys(validPathProgress).length !== Object.keys(pathProgress).length) {
-      setPathProgress(validPathProgress);
-      if (!hasActiveProgress) {
-        clearPathProgress();
-      }
-    }
-    
-    // 如果有未完成的全局进度，继续轮询
-    if (globalProgress.status !== 'idle' && globalProgress.status !== 'completed' && globalProgress.status !== 'error') {
-      startProgressPolling();
-    }
-    
-    // 如果有未完成的路径进度，继续轮询
-    Object.entries(validPathProgress).forEach(([pathId, progress]: [string, PathProgress]) => {
-      startProgressPolling(parseInt(pathId));
-    });
   }, []);
-
-  // 保存全局进度到 localStorage
+  
+  // 在paths加载完成后加载进度
   useEffect(() => {
-    if (globalProgress.status !== 'idle') {
-      saveGlobalProgress(globalProgress);
-      if (globalProgress.status === 'completed' || globalProgress.status === 'error') {
-        // 完成或错误后延迟清除，保留状态显示
-        setTimeout(() => {
-          if (globalProgress.status === 'completed') {
-            clearGlobalProgress();
-          }
-        }, 5000);
-      }
-    }
-  }, [globalProgress]);
-
-  // 保存路径进度到 localStorage
-  useEffect(() => {
-    if (Object.keys(pathProgress).length > 0) {
-      savePathProgress(pathProgress);
-      // 清除已完成或错误的路径进度
-      const hasActiveProgress = Object.values(pathProgress).some(
-        (p: PathProgress) => p.status !== 'idle' && p.status !== 'completed' && p.status !== 'error'
-      );
-      if (!hasActiveProgress) {
-        setTimeout(() => {
-          clearPathProgress();
-        }, 5000);
-      }
-    }
-  }, [pathProgress]);
-
-  // 开始轮询进度
-  const startProgressPolling = (pathId?: number, isGlobal?: boolean) => {
-    if (progressInterval.current) {
-      clearInterval(progressInterval.current);
-    }
-    progressInterval.current = setInterval(async () => {
-      try {
-        const p = await getScanProgress();
-        
-        if (isGlobal) {
-          // 全局操作：更新所有路径的进度
-          const allProgress: Record<number, PathProgress> = {};
-          paths.forEach(pathItem => {
-            allProgress[pathItem.id] = {
+    if (paths.length === 0) return;
+    
+    // 加载所有路径的初始进度
+    const loadInitialProgress = async () => {
+      const initialProgress: Record<number, PathProgress> = {};
+      
+      for (const pathItem of paths) {
+        try {
+          const p = await getScanProgress(pathItem.id);
+          if (p.status !== 'idle') {
+            initialProgress[pathItem.id] = {
               status: p.status,
               current: p.current,
               total: p.total,
               phase: p.phase,
               videoCount: p.videoCount
             };
-          });
-          setPathProgress(allProgress);
-        } else if (pathId !== undefined) {
-          // 单路径进度
+          }
+        } catch (e) {
+          // 忽略错误
+        }
+      }
+      
+      setPathProgress(initialProgress);
+      
+      // 检查是否有未完成的进度，如果有则开始轮询
+      checkAndStartPolling();
+    };
+    
+    loadInitialProgress();
+  }, [paths]);
+  
+  // 检查并开始轮询进度
+  const checkAndStartPolling = async () => {
+    try {
+      // 检查每个路径的进度
+      for (const pathItem of paths) {
+        try {
+          const pathP = await getScanProgress(pathItem.id);
+          // 先更新进度状态（包括completed状态）
           setPathProgress(prev => ({
             ...prev,
-            [pathId]: {
-              status: p.status,
-              current: p.current,
-              total: p.total,
-              phase: p.phase,
-              videoCount: p.videoCount
+            [pathItem.id]: {
+              status: pathP.status,
+              current: pathP.current,
+              total: pathP.total,
+              phase: pathP.phase,
+              videoCount: pathP.videoCount
             }
           }));
+          // 只有在正在处理时才启动轮询
+          if (pathP.status !== 'idle' && pathP.status !== 'completed' && pathP.status !== 'error') {
+            startProgressPolling(pathItem.id);
+          }
+        } catch (e) {
+          // 忽略错误
         }
+      }
+    } catch (e) {
+      // 忽略错误
+    }
+  };
+
+  // 开始轮询进度
+  const startProgressPolling = (pathId?: number, isGlobal?: boolean) => {
+    // 如果是全局操作，不再需要特殊处理
+    if (pathId === undefined) return;
+    
+    // 如果该路径已经在轮询，先清除
+    const existingInterval = progressIntervals.current.get(pathId);
+    if (existingInterval) {
+      clearInterval(existingInterval);
+    }
+    
+    // 启动新的轮询
+    const interval = setInterval(async () => {
+      try {
+        const p = await getScanProgress(pathId);
+        
+        // 更新该路径的进度
+        setPathProgress(prev => ({
+          ...prev,
+          [pathId]: {
+            status: p.status,
+            current: p.current,
+            total: p.total,
+            phase: p.phase,
+            videoCount: p.videoCount
+          }
+        }));
         
         if (p.status === 'completed' || p.status === 'error') {
-          if (progressInterval.current) {
-            clearInterval(progressInterval.current);
-            progressInterval.current = null;
-          }
+          // 确保最后一次状态更新完成后再停止轮询
+          setTimeout(() => {
+            const interval = progressIntervals.current.get(pathId);
+            if (interval) {
+              clearInterval(interval);
+              progressIntervals.current.delete(pathId);
+            }
+          }, 100);
         }
       } catch (e) {
         console.error(e);
       }
     }, 500);
+    
+    progressIntervals.current.set(pathId, interval);
   };
 
   // 停止轮询进度
-  const stopProgressPolling = () => {
-    if (progressInterval.current) {
-      clearInterval(progressInterval.current);
-      progressInterval.current = null;
+  const stopProgressPolling = (pathId?: number) => {
+    if (pathId !== undefined) {
+      const interval = progressIntervals.current.get(pathId);
+      if (interval) {
+        clearInterval(interval);
+        progressIntervals.current.delete(pathId);
+      }
+    } else {
+      // 停止所有轮询
+      progressIntervals.current.forEach((interval) => {
+        clearInterval(interval);
+      });
+      progressIntervals.current.clear();
     }
   };
 
@@ -277,9 +197,18 @@ export default function Settings() {
     
     setError(null);
     try {
-      await addVideoPath(newPath.trim());
+      const result = await addVideoPath(newPath.trim());
       setNewPath('');
       loadPaths();
+      
+      // 显示结果
+      if (result.added.length > 0 && result.existing.length > 0) {
+        setSuccess(`添加了 ${result.added.length} 个路径，${result.existing.length} 个路径已存在`);
+      } else if (result.added.length > 0) {
+        setSuccess(`添加了 ${result.added.length} 个路径`);
+      } else if (result.existing.length > 0) {
+        setSuccess(`${result.existing.length} 个路径已存在`);
+      }
     } catch (e: any) {
       setError(e.message);
     }
@@ -304,194 +233,279 @@ export default function Settings() {
     }
   };
 
+  // 切换预览图生成
+  const handleTogglePreviews = async (pathId: number, enabled: boolean) => {
+    try {
+      await updateVideoPath(pathId, { generate_previews: enabled });
+      loadPaths();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   // 导入（只添加新视频）
   const handleImport = async (pathId: number, path: string) => {
+    // 如果该路径已暂停，则继续
+    if (pausedPaths.has(pathId)) {
+      setPausedPaths(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(pathId);
+        return newSet;
+      });
+      startProgressPolling(pathId);
+      setSuccess('继续扫描');
+      
+      // 重新开始扫描
+      try {
+        const result = await scanVideos(path, pathId);
+        setImportResult(result);
+        loadStats();
+      } catch (e: any) {
+        setError(e.message);
+        stopProgressPolling();
+      }
+      return;
+    }
+    
+    // 如果该路径正在扫描，则暂停
+    if (pathProgress[pathId]?.status === 'scanning' || pathProgress[pathId]?.status === 'generating_previews') {
+      try {
+        await stopScan(pathId);
+        stopProgressPolling(pathId);
+        setPausedPaths(prev => new Set(prev).add(pathId));
+        setSuccess('扫描已暂停');
+      } catch (e: any) {
+        setError(e.message);
+      }
+      return;
+    }
+    
+    // 否则开始新的扫描
     setImportResult(null);
     setError(null);
     setSuccess(null);
-    
-    // 初始化路径进度
-    setPathProgress(prev => ({
-      ...prev,
-      [pathId]: { status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0 }
-    }));
     
     startProgressPolling(pathId);
     
     try {
-      const result = await scanVideos(path);
+      const result = await scanVideos(path, pathId);
       setImportResult(result);
       loadStats();
-      
-      // 更新最终状态
-      setPathProgress(prev => ({
-        ...prev,
-        [pathId]: { status: 'completed', current: result.added, total: result.added, phase: `已完成（${result.added} 个视频）`, videoCount: result.added }
-      }));
     } catch (e: any) {
       setError(e.message);
-      setPathProgress(prev => ({
-        ...prev,
-        [pathId]: { status: 'error', current: 0, total: 0, phase: '导入失败', videoCount: 0 }
-      }));
-    } finally {
       stopProgressPolling();
     }
   };
 
-  // 重新导入指定路径
-  const handleReimport = async (pathId: number, path: string) => {
+  // 生成预览图
+  const handleGeneratePreviews = async (pathId: number, path: string) => {
+    // 如果该路径预览图生成已暂停，则继续
+    if (previewPausedPaths.has(pathId)) {
+      setPreviewPausedPaths(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(pathId);
+        return newSet;
+      });
+      
+      startProgressPolling(pathId);
+      
+      try {
+        await generatePreviews(pathId);
+        loadStats();
+      } catch (e: any) {
+        setError(e.message);
+        stopProgressPolling(pathId);
+      }
+      return;
+    }
+    
+    // 如果该路径正在生成预览图，则暂停
+    if (pathProgress[pathId]?.status === 'generating_previews') {
+      try {
+        await stopScan(pathId);
+        stopProgressPolling(pathId);
+        setPreviewPausedPaths(prev => new Set(prev).add(pathId));
+        setSuccess('预览图生成已暂停');
+      } catch (e: any) {
+        setError(e.message);
+      }
+      return;
+    }
+    
+    // 否则开始新的预览图生成
     setImportResult(null);
     setError(null);
     setSuccess(null);
-    
-    // 初始化路径进度
-    setPathProgress(prev => ({
-      ...prev,
-      [pathId]: { status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0 }
-    }));
     
     startProgressPolling(pathId);
     
     try {
-      const result = await rescanVideos(path);
-      setImportResult(result);
+      await generatePreviews(pathId);
       loadStats();
-      
-      // 更新最终状态
-      setPathProgress(prev => ({
-        ...prev,
-        [pathId]: { status: 'completed', current: result.added, total: result.added, phase: `已完成（${result.added} 个视频）`, videoCount: result.added }
-      }));
     } catch (e: any) {
       setError(e.message);
-      setPathProgress(prev => ({
-        ...prev,
-        [pathId]: { status: 'error', current: 0, total: 0, phase: '导入失败', videoCount: 0 }
-      }));
-    } finally {
-      stopProgressPolling();
+      stopProgressPolling(pathId);
     }
   };
 
-  // 全部导入（全局增量导入）
-  const handleImportAll = async () => {
-    setImporting(true);
+  // 清除路径数据（不删除路径配置）
+  const handleClearPath = async (id: number) => {
+    try {
+      // 清除该路径的进度状态
+      setPathProgress(prev => {
+        const newProgress = { ...prev };
+        delete newProgress[id];
+        return newProgress;
+      });
+      
+      // 清除暂停状态
+      setPausedPaths(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(id);
+        return newSet;
+      });
+      
+      await clearVideoPath(id);
+      loadStats();
+      setSuccess('路径数据已清除');
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  // 一键导入（每个路径分别进行扫描、生图操作）
+  const handleBatchImport = async () => {
+    // 如果有任何路径已暂停，则继续所有
+    if (pausedPaths.size > 0) {
+      for (const pathId of pausedPaths) {
+        setPausedPaths(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(pathId);
+          return newSet;
+        });
+        startProgressPolling(pathId);
+        
+        // 重新开始扫描该路径
+        const pathItem = paths.find(p => p.id === pathId);
+        if (pathItem) {
+          try {
+            const result = await scanVideos(pathItem.path, pathId);
+            setImportResult(result);
+            loadStats();
+          } catch (e: any) {
+            setError(e.message);
+            stopProgressPolling(pathId);
+          }
+        }
+      }
+      setSuccess('继续所有扫描');
+      return;
+    }
+    
+    // 如果有任何路径正在扫描，则暂停所有
+    const hasActiveScan = paths.some(p => 
+      pathProgress[p.id]?.status === 'scanning' || pathProgress[p.id]?.status === 'generating_previews'
+    );
+    
+    if (hasActiveScan) {
+      // 收集需要暂停的路径ID
+      const pathsToPause = paths.filter(pathItem => 
+        pathProgress[pathItem.id]?.status === 'scanning' || pathProgress[pathItem.id]?.status === 'generating_previews'
+      );
+      
+      // 并行停止所有正在扫描的路径
+      const stopPromises = pathsToPause.map(async (pathItem) => {
+        try {
+          await stopScan(pathItem.id);
+          stopProgressPolling(pathItem.id);
+        } catch (e) {
+          // 忽略错误
+        }
+      });
+      
+      // 同时停止批量扫描（设置全局标志）
+      stopPromises.push(stopScan(undefined).catch(() => {}));
+      
+      await Promise.all(stopPromises);
+      
+      // 一次性更新暂停状态
+      setPausedPaths(prev => {
+        const newSet = new Set(prev);
+        pathsToPause.forEach(p => newSet.add(p.id));
+        return newSet;
+      });
+      
+      setSuccess('所有扫描已暂停');
+      return;
+    }
+    
+    // 否则开始新的批量扫描
     setImportResult(null);
     setError(null);
     setSuccess(null);
     
-    // 初始化所有路径的进度
-    const initialProgress: Record<number, PathProgress> = {};
-    paths.forEach(p => {
-      initialProgress[p.id] = { status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0 };
-    });
-    setPathProgress(initialProgress);
+    // 为每个路径启动独立的轮询
+    for (const pathItem of paths) {
+      startProgressPolling(pathItem.id);
+    }
     
-    startProgressPolling(undefined, true);
-    
-    try {
-      const result = await scanVideos();
-      setImportResult(result);
-      loadStats();
+    // 逐个处理每个路径
+    for (let i = 0; i < paths.length; i++) {
+      const pathItem = paths[i];
       
-      // 更新所有路径的最终状态
-      const finalProgress: Record<number, PathProgress> = {};
-      paths.forEach(p => {
-        finalProgress[p.id] = { 
-          status: 'completed', 
-          current: result.added, 
-          total: result.added, 
-          phase: `已完成（${result.added} 个视频）`, 
-          videoCount: result.added 
-        };
-      });
-      setPathProgress(finalProgress);
-    } catch (e: any) {
-      setError(e.message);
-      // 更新所有路径的错误状态
-      const errorProgress: Record<number, PathProgress> = {};
-      paths.forEach(p => {
-        errorProgress[p.id] = { status: 'error', current: 0, total: 0, phase: '导入失败', videoCount: 0 };
-      });
-      setPathProgress(errorProgress);
-    } finally {
-      setImporting(false);
-      stopProgressPolling();
+      // 设置其他路径为"排队中"
+      for (let j = i + 1; j < paths.length; j++) {
+        const progress = { status: 'scanning', current: 0, total: 0, phase: '排队中...', videoCount: 0 };
+        setPathProgress(prev => ({
+          ...prev,
+          [paths[j].id]: progress
+        }));
+      }
+      
+      try {
+        const result = await scanVideos(pathItem.path, pathItem.id);
+        setImportResult(result);
+        loadStats();
+      } catch (e: any) {
+        setError(e.message);
+      }
     }
   };
 
-  // 全部重新导入（删除数据库并重新生成，保留路径配置，然后导入）
-  const handleReimportAll = async () => {
-    setImporting(true);
+  // 一键清除数据（每个路径分别清除数据）
+  const handleBatchClear = async () => {
     setImportResult(null);
     setError(null);
     setSuccess(null);
     
-    // 初始化所有路径的进度
-    const initialProgress: Record<number, PathProgress> = {};
-    paths.forEach(p => {
-      initialProgress[p.id] = { status: 'scanning', current: 0, total: 0, phase: '扫描视频文件...', videoCount: 0 };
-    });
-    setPathProgress(initialProgress);
-    
-    startProgressPolling(undefined, true);
-    
-    try {
-      const result = await rescanAll();
-      setImportResult(result);
-      loadStats();
-      loadPaths();
-      
-      // 更新所有路径的最终状态
-      const finalProgress: Record<number, PathProgress> = {};
-      paths.forEach(p => {
-        finalProgress[p.id] = { 
-          status: 'completed', 
-          current: result.added, 
-          total: result.added, 
-          phase: `已完成（${result.added} 个视频）`, 
-          videoCount: result.added 
-        };
-      });
-      setPathProgress(finalProgress);
-    } catch (e: any) {
-      setError(e.message);
-      // 更新所有路径的错误状态
-      const errorProgress: Record<number, PathProgress> = {};
-      paths.forEach(p => {
-        errorProgress[p.id] = { status: 'error', current: 0, total: 0, phase: '导入失败', videoCount: 0 };
-      });
-      setPathProgress(errorProgress);
-    } finally {
-      setImporting(false);
-      stopProgressPolling();
+    for (const pathItem of paths) {
+      try {
+        await handleClearPath(pathItem.id);
+      } catch (e: any) {
+        setError(e.message);
+      }
     }
+    
+    setSuccess('所有路径数据已清除');
   };
 
-  // 全部删除（删除数据库和所有数据，包括路径配置）
-  const handleDeleteAll = async () => {
-    setImporting(true);
+  // 一键删除（每个路径分别删除）
+  const handleBatchDelete = async () => {
     setImportResult(null);
     setError(null);
     setSuccess(null);
-    setPathProgress({}); // 清除所有路径进度
-    clearPathProgress();
     
-    try {
-      await deleteAll();
-      loadStats();
-      loadPaths();
-      setSuccess('所有数据已删除，数据库已重新生成');
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setImporting(false);
+    // 逐个处理每个路径
+    for (const pathItem of paths) {
+      try {
+        await handleDeletePath(pathItem.id);
+      } catch (e: any) {
+        setError(e.message);
+      }
     }
+    
+    setSuccess('所有路径已删除');
   };
-
-  // 检查是否有任何路径正在导入
-  const isAnyPathImporting = Object.values(pathProgress).some((p: PathProgress) => p.status !== 'idle' && p.status !== 'completed' && p.status !== 'error');
 
   return (
     <main className="flex-1 max-w-200 mx-auto w-full px-4 py-8">
@@ -530,12 +544,17 @@ export default function Settings() {
             type="text"
             value={newPath}
             onChange={(e) => setNewPath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newPath.trim()) {
+                handleAddPath();
+              }
+            }}
             placeholder="输入视频文件夹路径，如: D:\Videos"
             className="flex-1 h-10 px-4 rounded-lg bg-slate-100 dark:bg-slate-800 border-none outline-none text-sm"
           />
           <button
             onClick={handleAddPath}
-            className="h-10 px-4 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+            className="h-10 px-4 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors cursor-pointer"
           >
             添加路径
           </button>
@@ -555,48 +574,108 @@ export default function Settings() {
                     <div className="text-xs text-slate-500">{p.enabled ? '已启用' : '已禁用'}</div>
                   </div>
                   
-                  {/* 路径进度条 */}
+                  {/* 路径状态 */}
                   <div className="flex-1 mx-4">
-                    {progress.status !== 'idle' && (
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1">
-                          {progress.status !== 'completed' && (
-                            <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
-                              <div 
-                                className="bg-primary h-2 rounded-full transition-all duration-300"
-                                style={{ width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%` }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                        <span className={`text-xs whitespace-nowrap ${progress.status === 'completed' ? 'text-green-600 dark:text-green-400' : 'text-slate-500'}`}>
-                          {progress.phase}
-                        </span>
-                      </div>
+                    {(progress.status !== 'idle' || pausedPaths.has(p.id)) && (
+                      <span className={`text-xs whitespace-nowrap ${
+                        pausedPaths.has(p.id)
+                          ? 'text-yellow-600 dark:text-yellow-400'
+                          : progress.status === 'completed' 
+                            ? 'text-green-600 dark:text-green-400' 
+                            : progress.status === 'error' 
+                              ? 'text-red-600 dark:text-red-400' 
+                              : 'text-pink-600 dark:text-pink-400'
+                      }`}>
+                        {progress.phase || (
+                          progress.status === 'scanning' 
+                            ? `扫描视频文件(${progress.current}/${progress.total})...` 
+                            : progress.status === 'generating_previews' 
+                              ? `生成预览图(${progress.current}/${progress.total})...` 
+                              : progress.status === 'completed' 
+                                ? `已完成(${progress.videoCount}个视频)` 
+                                : progress.status === 'error' 
+                                  ? '失败' 
+                                  : ''
+                        )}
+                      </span>
                     )}
                   </div>
                   
                   <div className="flex gap-2 flex-shrink-0">
                     <button
                       onClick={() => handleImport(p.id, p.path)}
-                      disabled={importing || isAnyPathImporting || isThisImporting}
-                      className="h-8 px-3 bg-primary/10 text-primary rounded text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-50"
-                      title="只导入新视频"
+                      disabled={isAnyPathScanning && !pausedPaths.has(p.id) && pathProgress[p.id]?.status !== 'scanning' && pathProgress[p.id]?.status !== 'generating_previews'}
+                      className={`h-8 px-3 rounded text-xs font-medium transition-colors ${
+                        pausedPaths.has(p.id)
+                          ? 'bg-green-100 text-green-600 hover:bg-green-200 cursor-pointer'
+                          : (pathProgress[p.id]?.status === 'scanning' || pathProgress[p.id]?.status === 'generating_previews')
+                            ? 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200 cursor-pointer'
+                            : isAnyPathScanning
+                              ? 'bg-primary/10 text-primary opacity-50 cursor-not-allowed'
+                              : 'bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer'
+                      }`}
+                      title={
+                        pausedPaths.has(p.id)
+                          ? '继续导入'
+                          : (pathProgress[p.id]?.status === 'scanning' || pathProgress[p.id]?.status === 'generating_previews')
+                            ? '暂停导入'
+                            : '导入数据和封面'
+                      }
                     >
-                      导入
+                      {pausedPaths.has(p.id)
+                        ? '继续'
+                        : (pathProgress[p.id]?.status === 'scanning' || pathProgress[p.id]?.status === 'generating_previews')
+                          ? '暂停'
+                          : '导入'
+                      }
                     </button>
                     <button
-                      onClick={() => handleReimport(p.id, p.path)}
-                      disabled={importing || isAnyPathImporting || isThisImporting}
-                      className="h-8 px-3 bg-orange-100 text-orange-600 rounded text-xs font-medium hover:bg-orange-20 transition-colors disabled:opacity-50"
-                      title="删除该目录数据并重新导入"
+                      onClick={() => handleGeneratePreviews(p.id, p.path)}
+                      disabled={isAnyPathScanning && !previewPausedPaths.has(p.id) && pathProgress[p.id]?.status !== 'generating_previews'}
+                      className={`h-8 px-3 rounded text-xs font-medium transition-colors ${
+                        previewPausedPaths.has(p.id)
+                          ? 'bg-green-100 text-green-600 hover:bg-green-200 cursor-pointer'
+                          : pathProgress[p.id]?.status === 'generating_previews'
+                            ? 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200 cursor-pointer'
+                            : isAnyPathScanning
+                              ? 'bg-purple-100 text-purple-600 opacity-50 cursor-not-allowed'
+                              : 'bg-purple-100 text-purple-600 hover:bg-purple-200 cursor-pointer'
+                      }`}
+                      title={
+                        previewPausedPaths.has(p.id)
+                          ? '继续生成预览图'
+                          : pathProgress[p.id]?.status === 'generating_previews'
+                            ? '暂停生成预览图'
+                            : '生成预览图'
+                      }
                     >
-                      重新导入
+                      {previewPausedPaths.has(p.id)
+                        ? '继续'
+                        : pathProgress[p.id]?.status === 'generating_previews'
+                          ? '暂停'
+                          : '预览图'
+                      }
+                    </button>
+                    <button
+                      onClick={() => handleClearPath(p.id)}
+                      disabled={isAnyPathImporting}
+                      className={`h-8 px-3 rounded text-xs font-medium transition-colors ${
+                        isAnyPathImporting
+                          ? 'bg-orange-100 text-orange-600 opacity-50 cursor-not-allowed'
+                          : 'bg-orange-100 text-orange-600 hover:bg-orange-200 cursor-pointer'
+                      }`}
+                      title="清除该路径的数据，不删除路径配置"
+                    >
+                      清除数据
                     </button>
                     <button
                       onClick={() => handleDeletePath(p.id)}
-                      disabled={isThisImporting}
-                      className="h-8 px-3 bg-red-100 text-red-600 rounded text-xs font-medium hover:bg-red-20 transition-colors disabled:opacity-50"
+                      disabled={isAnyPathImporting}
+                      className={`h-8 px-3 rounded text-xs font-medium transition-colors ${
+                        isAnyPathImporting
+                          ? 'bg-red-100 text-red-600 opacity-50 cursor-not-allowed'
+                          : 'bg-red-100 text-red-600 hover:bg-red-200 cursor-pointer'
+                      }`}
                       title="删除路径及该路径下的所有视频数据"
                     >
                       删除
@@ -612,31 +691,58 @@ export default function Settings() {
           </div>
         )}
 
-        {/* 全部操作按钮 */}
+        {/* 一键操作按钮 */}
         <div className="flex items-center justify-end gap-3 mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
           <button
-            onClick={handleImportAll}
-            disabled={importing || isAnyPathImporting || paths.length === 0}
-            className="h-10 px-6 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-            title="全局增量导入，只添加新视频"
+            onClick={handleBatchImport}
+            disabled={paths.length === 0}
+            className={`h-10 px-6 rounded-lg text-sm font-medium transition-colors ${
+              pausedPaths.size > 0
+                ? 'bg-green-500 text-white hover:bg-green-600 cursor-pointer'
+                : isAnyPathScanning
+                  ? 'bg-yellow-500 text-white hover:bg-yellow-600 cursor-pointer'
+                  : paths.length === 0
+                    ? 'bg-primary text-white opacity-50 cursor-not-allowed'
+                    : 'bg-primary text-white hover:bg-primary/90 cursor-pointer'
+            }`}
+            title={
+              pausedPaths.size > 0
+                ? '继续所有扫描'
+                : isAnyPathScanning
+                  ? '暂停所有扫描'
+                  : '一键导入所有路径，只添加新视频'
+            }
           >
-            {importing ? '导入中...' : '全部导入'}
+            {pausedPaths.size > 0
+              ? '一键继续'
+              : isAnyPathScanning
+                ? '一键暂停'
+                : '一键导入'
+            }
           </button>
           <button
-            onClick={handleReimportAll}
-            disabled={importing || isAnyPathImporting}
-            className="h-10 px-6 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors disabled:opacity-50"
-            title="全局重新导入，删除数据库并重新生成，保留路径配置"
+            onClick={handleBatchClear}
+            disabled={paths.length === 0 || isAnyPathScanning}
+            className={`h-10 px-6 rounded-lg text-sm font-medium transition-colors ${
+              paths.length === 0 || isAnyPathScanning
+                ? 'bg-orange-500 text-white opacity-50 cursor-not-allowed'
+                : 'bg-orange-500 text-white hover:bg-orange-600 cursor-pointer'
+            }`}
+            title="一键清除所有路径的数据，不删除路径配置"
           >
-            {importing ? '导入中...' : '全部重新导入'}
+            一键清除数据
           </button>
           <button
-            onClick={handleDeleteAll}
-            disabled={importing || isAnyPathImporting}
-            className="h-10 px-6 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
-            title="删除数据库和所有数据，包括路径配置"
+            onClick={handleBatchDelete}
+            disabled={paths.length === 0 || isAnyPathScanning}
+            className={`h-10 px-6 rounded-lg text-sm font-medium transition-colors ${
+              paths.length === 0 || isAnyPathScanning
+                ? 'bg-red-500 text-white opacity-50 cursor-not-allowed'
+                : 'bg-red-500 text-white hover:bg-red-600 cursor-pointer'
+            }`}
+            title="一键删除所有路径"
           >
-            {importing ? '处理中...' : '全部删除'}
+            一键删除
           </button>
         </div>
 

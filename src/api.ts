@@ -108,6 +108,7 @@ export interface VideoPath {
   id: number;
   path: string;
   enabled: boolean;
+  generate_previews: boolean;
   createdAt: string;
 }
 
@@ -233,7 +234,7 @@ export async function getVideoPaths(): Promise<VideoPath[]> {
 }
 
 // 添加视频路径
-export async function addVideoPath(path: string): Promise<VideoPath> {
+export async function addVideoPath(path: string): Promise<{ added: VideoPath[]; existing: string[]; total: number }> {
   const response = await fetch(`${API_BASE}/paths`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -245,6 +246,14 @@ export async function addVideoPath(path: string): Promise<VideoPath> {
   return data.data;
 }
 
+// 清除路径数据（不删除路径配置）
+export async function clearVideoPath(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/paths/${id}/clear`, { method: 'POST' });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
 // 删除视频路径
 export async function deleteVideoPath(id: number): Promise<void> {
   const response = await fetch(`${API_BASE}/paths/${id}`, { method: 'DELETE' });
@@ -253,12 +262,38 @@ export async function deleteVideoPath(id: number): Promise<void> {
   if (!data.success) throw new Error(data.error);
 }
 
+// 更新视频路径
+export async function updateVideoPath(id: number, updates: { enabled?: boolean; generate_previews?: boolean }): Promise<VideoPath> {
+  const response = await fetch(`${API_BASE}/paths/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates)
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
 // 扫描视频
-export async function scanVideos(path?: string): Promise<{ added: number; total: number }> {
+export async function scanVideos(path?: string, pathId?: number): Promise<{ added: number; total: number }> {
   const response = await fetch(`${API_BASE}/scan`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path })
+    body: JSON.stringify({ path, pathId })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 生成预览图
+export async function generatePreviews(pathId: number): Promise<{ added: number; total: number }> {
+  const response = await fetch(`${API_BASE}/generate-previews`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pathId })
   });
   const data = await response.json();
   
@@ -267,11 +302,11 @@ export async function scanVideos(path?: string): Promise<{ added: number; total:
 }
 
 // 重新扫描指定路径（清除缓存后重新扫描）
-export async function rescanVideos(path: string): Promise<{ added: number; total: number }> {
+export async function rescanVideos(path: string, pathId?: number): Promise<{ added: number; total: number }> {
   const response = await fetch(`${API_BASE}/rescan`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path })
+    body: JSON.stringify({ path, pathId })
   });
   const data = await response.json();
   
@@ -336,7 +371,7 @@ export async function deleteAll(): Promise<void> {
 }
 
 // 获取扫描进度
-export async function getScanProgress(): Promise<{
+export async function getScanProgress(pathId?: number): Promise<{
   status: 'idle' | 'scanning' | 'generating_covers' | 'generating_previews' | 'completed' | 'error';
   current: number;
   total: number;
@@ -346,7 +381,8 @@ export async function getScanProgress(): Promise<{
   phase: string;
   videoCount: number;
 }> {
-  const response = await fetch(`${API_BASE}/scan-progress`);
+  const url = pathId ? `${API_BASE}/scan-progress?pathId=${pathId}` : `${API_BASE}/scan-progress`;
+  const response = await fetch(url);
   const data = await response.json();
   
   if (!data.success) throw new Error(data.error);
@@ -362,6 +398,18 @@ export async function renameVideo(
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(options)
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 停止扫描
+export async function stopScan(pathId?: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/stop-scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pathId })
   });
   const data = await response.json();
   

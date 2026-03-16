@@ -93,9 +93,17 @@ export async function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       path TEXT NOT NULL UNIQUE,
       enabled INTEGER DEFAULT 1,
+      generate_previews INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // 添加 generate_previews 字段（如果不存在）
+  try {
+    db.exec(`ALTER TABLE video_paths ADD COLUMN generate_previews INTEGER DEFAULT 1`);
+  } catch (e) {
+    // 字段已存在，忽略错误
+  }
 
   // 创建播放历史表
   db.exec(`
@@ -107,6 +115,26 @@ export async function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (video_id) REFERENCES videos(id),
       UNIQUE(video_id)
+    )
+  `);
+
+  // 创建扫描进度表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scan_progress (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      path_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'idle',
+      current INTEGER DEFAULT 0,
+      total INTEGER DEFAULT 0,
+      current_file TEXT DEFAULT '',
+      message TEXT DEFAULT '',
+      start_time INTEGER DEFAULT 0,
+      phase TEXT DEFAULT '',
+      video_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (path_id) REFERENCES video_paths(id),
+      UNIQUE(path_id)
     )
   `);
 
