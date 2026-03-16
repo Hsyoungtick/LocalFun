@@ -1,4 +1,4 @@
-import { useState, useRef, MouseEvent } from 'react';
+import { useState, useRef, MouseEvent, useEffect } from 'react';
 import { getThumbnailUrl } from '../api';
 
 interface VideoPreviewProps {
@@ -12,8 +12,7 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
   const containerRef = useRef<HTMLDivElement>(null);
   const [isHovering, setIsHovering] = useState(false);
   const [previewIndex, setPreviewIndex] = useState(0);
-  const [spriteLoaded, setSpriteLoaded] = useState(false);
-  const [spriteError, setSpriteError] = useState(false);
+  const [spriteAvailable, setSpriteAvailable] = useState<boolean | null>(null);
   const [coverError, setCoverError] = useState(false);
   
   const frameCount = 20;
@@ -25,9 +24,16 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
   // 封面 URL
   const coverUrl = getThumbnailUrl(videoId);
 
+  // 组件加载时检查精灵图是否存在（使用 fetch 避免控制台报错）
+  useEffect(() => {
+    fetch(spriteUrl, { method: 'HEAD' })
+      .then(response => setSpriteAvailable(response.ok))
+      .catch(() => setSpriteAvailable(false));
+  }, [spriteUrl]);
+
   // 鼠标移动时计算预览索引
   const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
-    if (!containerRef.current || duration <= 0) return;
+    if (!containerRef.current || duration <= 0 || !spriteAvailable) return;
 
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -60,17 +66,14 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
   const currentTime = previewIndex / frameCount * duration;
 
   // 计算精灵图位置
-  // 精灵图布局: 10列 x 5行
   const col = previewIndex % cols;
   const row = Math.floor(previewIndex / cols);
   
-  // CSS background-position 百分比公式: offset = (container - image) * percentage
-  // backgroundSize: 1000% 500% → image = 10*container 宽, 5*container 高
-  // 要显示第 col 列: offset_x = -col * containerWidth
-  // (containerWidth - 10*containerWidth) * percentage_x = -col * containerWidth
-  // percentage_x = col / 9 = col / (cols - 1)
   const backgroundPositionX = col / (cols - 1) * 100;
   const backgroundPositionY = row / (rows - 1) * 100;
+
+  // 是否显示精灵图预览（悬浮且有精灵图）
+  const showSpritePreview = isHovering && spriteAvailable === true;
 
   return (
     <div
@@ -80,8 +83,8 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
       onMouseLeave={handleMouseLeave}
       onMouseMove={handleMouseMove}
     >
-      {/* 默认封面 - 非悬浮时显示 */}
-      {!isHovering && !coverError && (
+      {/* 默认封面 - 非悬浮时显示，或悬浮但无精灵图时也显示 */}
+      {!showSpritePreview && !coverError && (
         <img
           src={coverUrl}
           alt={title}
@@ -91,7 +94,7 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
       )}
 
       {/* 非悬浮时的底部渐变和元素 */}
-      {!isHovering && (
+      {!showSpritePreview && (
         <>
           <div className="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/70 to-transparent pointer-events-none" />
           {/* 播放量 - 左下角 */}
@@ -111,39 +114,19 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
         </>
       )}
 
-      {/* 悬浮时显示精灵图预览 */}
-      {isHovering && (
+      {/* 悬浮且有精灵图时显示预览 */}
+      {showSpritePreview && (
         <div className="absolute inset-0 bg-slate-800">
-          {/* 预加载精灵图 */}
-          <img
-            src={spriteUrl}
-            alt=""
-            className="hidden"
-            onLoad={() => setSpriteLoaded(true)}
-            onError={() => setSpriteError(true)}
-          />
-          
           {/* 精灵图预览帧 */}
-          {!spriteError && spriteLoaded ? (
-            <div
-              className="w-full h-full"
-              style={{
-                backgroundImage: `url(${spriteUrl})`,
-                backgroundPosition: `${backgroundPositionX}% ${backgroundPositionY}%`,
-                backgroundSize: `${cols * 100}% ${rows * 100}%`,
-                backgroundRepeat: 'no-repeat'
-              }}
-            />
-          ) : (
-            // 精灵图加载失败或未加载时显示封面
-            !coverError && (
-              <img
-                src={coverUrl}
-                alt={title}
-                className="w-full h-full object-cover"
-              />
-            )
-          )}
+          <div
+            className="w-full h-full"
+            style={{
+              backgroundImage: `url(${spriteUrl})`,
+              backgroundPosition: `${backgroundPositionX}% ${backgroundPositionY}%`,
+              backgroundSize: `${cols * 100}% ${rows * 100}%`,
+              backgroundRepeat: 'no-repeat'
+            }}
+          />
 
           {/* 底部渐变 */}
           <div className="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/70 to-transparent pointer-events-none" />
@@ -175,7 +158,7 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
       )}
 
       {/* 无封面时的占位 */}
-      {coverError && !isHovering && (
+      {coverError && !showSpritePreview && (
         <div className="w-full h-full flex items-center justify-center bg-slate-200 dark:bg-slate-700">
           <span className="material-symbols-outlined text-4xl text-slate-400">video_file</span>
         </div>

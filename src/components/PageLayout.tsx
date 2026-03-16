@@ -11,6 +11,11 @@ interface PageLayoutProps {
   children?: React.ReactNode;
   showTitleEdit?: boolean;
   onTitleEdit?: () => void;
+  onMouseDown?: (e: React.MouseEvent) => void;
+  onMouseMove?: (e: React.MouseEvent) => void;
+  onMouseUp?: () => void;
+  onMouseLeave?: () => void;
+  mainRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 export default function PageLayout({
@@ -23,12 +28,24 @@ export default function PageLayout({
   extraButtons,
   children,
   showTitleEdit,
-  onTitleEdit
+  onTitleEdit,
+  onMouseDown,
+  onMouseMove,
+  onMouseUp,
+  onMouseLeave,
+  mainRef
 }: PageLayoutProps) {
   const hasContent = children && !React.Children.toArray(children).every(child => !child);
   
   return (
-    <main className="flex-1 flex flex-col w-full max-w-400 mx-auto px-4 md:px-10 py-6">
+    <main 
+      ref={mainRef}
+      className="flex-1 flex flex-col w-full max-w-400 mx-auto px-4 md:px-10 py-6 select-none"
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseLeave}
+    >
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           {titleIcon && (

@@ -10,6 +10,7 @@ interface ContextMenuProps {
   videoCategory?: string;
   authors: Author[];
   categories: Category[];
+  selectedCount?: number;
   onClose: () => void;
   onEditTitle: () => void;
   onChangeAuthor: (authorName: string) => void;
@@ -25,6 +26,7 @@ export default function ContextMenu({
   videoCategory,
   authors,
   categories,
+  selectedCount,
   onClose,
   onEditTitle,
   onChangeAuthor,
@@ -37,14 +39,14 @@ export default function ContextMenu({
   const [newAuthorName, setNewAuthorName] = useState('');
   const justOpenedRef = useRef(false);
 
-  // 关闭菜单的函数
+  const isBatchMode = selectedCount && selectedCount > 1;
+
   const closeMenu = useCallback(() => {
     onClose();
   }, [onClose]);
 
   useEffect(() => {
     const handleMouseDown = (e: MouseEvent) => {
-      // 如果刚刚打开子菜单，忽略这次点击
       if (justOpenedRef.current) {
         justOpenedRef.current = false;
         return;
@@ -54,7 +56,6 @@ export default function ContextMenu({
       }
     };
 
-    // 立即添加监听器，但使用 justOpenedRef 来防止误关闭
     document.addEventListener('mousedown', handleMouseDown);
 
     const handleScroll = () => closeMenu();
@@ -115,7 +116,7 @@ export default function ContextMenu({
         style={{ left: x, top: y }}
       >
         <div className="px-3 py-2 text-xs text-slate-500 border-b border-slate-200 dark:border-slate-700">
-          选择作者
+          {isBatchMode ? `修改${selectedCount}个视频的作者` : '选择作者'}
         </div>
         <div className="p-2 border-b border-slate-200 dark:border-slate-700">
           <div className="flex gap-2">
@@ -168,7 +169,7 @@ export default function ContextMenu({
         style={{ left: x, top: y }}
       >
         <div className="px-3 py-2 text-xs text-slate-500 border-b border-slate-200 dark:border-slate-700">
-          移动到分类
+          {isBatchMode ? `移动${selectedCount}个视频到分类` : '移动到分类'}
         </div>
         {categories.map((category) => (
           <button
@@ -197,34 +198,41 @@ export default function ContextMenu({
       className="fixed z-50 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 py-1 min-w-[150px]"
       style={{ left: x, top: y }}
     >
+      {isBatchMode && (
+        <div className="px-4 py-2 text-xs text-primary font-medium border-b border-slate-200 dark:border-slate-700">
+          已选择 {selectedCount} 个视频
+        </div>
+      )}
       <button
         onClick={handleEditTitle}
         className="w-full px-4 py-2 text-left text-sm text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-2"
       >
         <span className="material-symbols-outlined text-base">edit</span>
-        修改标题
+        {isBatchMode ? `批量修改标题` : '修改标题'}
       </button>
       <button
         onClick={handleShowAuthorList}
         className="w-full px-4 py-2 text-left text-sm text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-2"
       >
         <span className="material-symbols-outlined text-base">person</span>
-        修改作者
+        {isBatchMode ? `批量修改作者` : '修改作者'}
       </button>
       <button
         onClick={handleShowCategoryList}
         className="w-full px-4 py-2 text-left text-sm text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-2"
       >
         <span className="material-symbols-outlined text-base">folder</span>
-        移动
+        {isBatchMode ? `批量移动` : '移动'}
       </button>
-      <button
-        onClick={handleOpenFile}
-        className="w-full px-4 py-2 text-left text-sm text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-2"
-      >
-        <span className="material-symbols-outlined text-base">open_in_new</span>
-        打开源文件
-      </button>
+      {!isBatchMode && (
+        <button
+          onClick={handleOpenFile}
+          className="w-full px-4 py-2 text-left text-sm text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-2"
+        >
+          <span className="material-symbols-outlined text-base">open_in_new</span>
+          打开源文件
+        </button>
+      )}
     </div>
   );
 }
