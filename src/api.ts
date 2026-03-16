@@ -174,6 +174,17 @@ export async function deleteVideo(id: number): Promise<void> {
   if (!data.success) throw new Error(data.error);
 }
 
+// 检查精灵图是否存在
+export async function checkSpriteExists(id: number): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/videos/${id}/sprite-exists`);
+    const data = await response.json();
+    return data.exists;
+  } catch {
+    return false;
+  }
+}
+
 // 获取分类列表
 export async function getCategories(): Promise<Category[]> {
   const response = await fetch(`${API_BASE}/categories`);

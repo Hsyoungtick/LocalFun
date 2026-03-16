@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, MouseEvent, ChangeEvent, forwardRef, useImperativeHandle } from 'react';
-import { updatePlayHistory } from '../api';
+import { updatePlayHistory, checkSpriteExists } from '../api';
 
 interface CustomVideoPlayerProps {
   src: string;
@@ -57,18 +57,21 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [isHoveringProgress, setIsHoveringProgress] = useState(false);
+  const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [previewTime, setPreviewTime] = useState(0);
   const [previewPosition, setPreviewPosition] = useState(0);
-  const [spriteLoaded, setSpriteLoaded] = useState(false);
-  const [spriteError, setSpriteError] = useState(false);
+  const [spriteAvailable, setSpriteAvailable] = useState<boolean | null>(null);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [showVolumeIndicator, setShowVolumeIndicator] = useState(false);
   const [hasSetInitialProgress, setHasSetInitialProgress] = useState(false);
+  const [showEndCountdown, setShowEndCountdown] = useState(false);
+  const [countdown, setCountdown] = useState(5);
   
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const volumeIndicatorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const seekIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const saveProgressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   const frameCount = 20;
   const cols = 5;
@@ -87,15 +90,24 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
     };
     const handleCanPlay = () => {
       if (!hasSetInitialProgress && initialProgress > 0) {
-        console.log('设置初始播放进度:', initialProgress);
-        video.currentTime = initialProgress;
+        // 如果进度 >= 100%，从 0 开始播放
+        if (initialProgress >= 100) {
+          video.currentTime = 0;
+        } else {
+          video.currentTime = (initialProgress / 100) * (duration || video.duration || 0);
+        }
         setHasSetInitialProgress(true);
       }
     };
     const handlePlay = () => {
       setIsPlaying(true);
+      // 立即保存一次播放历史
+      const progressPercent = (video.currentTime / (duration || 1)) * 100;
+      updatePlayHistory(videoId, progressPercent).catch(console.error);
+      // 然后每10秒保存一次
       saveProgressIntervalRef.current = setInterval(() => {
-        updatePlayHistory(videoId, video.currentTime).catch(console.error);
+        const progressPercent = (video.currentTime / (duration || 1)) * 100;
+        updatePlayHistory(videoId, progressPercent).catch(console.error);
       }, 10000);
     };
     const handlePause = () => {
@@ -104,7 +116,8 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
         clearInterval(saveProgressIntervalRef.current);
         saveProgressIntervalRef.current = null;
       }
-      updatePlayHistory(videoId, video.currentTime).catch(console.error);
+      const progressPercent = (video.currentTime / (duration || 1)) * 100;
+      updatePlayHistory(videoId, progressPercent).catch(console.error);
     };
     const handleEnded = () => {
       setIsPlaying(false);
@@ -112,9 +125,26 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
         clearInterval(saveProgressIntervalRef.current);
         saveProgressIntervalRef.current = null;
       }
-      updatePlayHistory(videoId, video.currentTime).catch(console.error);
-      if (onEnded) {
-        onEnded();
+      const progressPercent = (video.currentTime / (duration || 1)) * 100;
+      updatePlayHistory(videoId, progressPercent).catch(console.error);
+      
+      // 如果有下一个视频，显示倒计时弹窗
+      if (hasNext && onEnded) {
+        setShowEndCountdown(true);
+        setCountdown(5);
+        countdownIntervalRef.current = setInterval(() => {
+          setCountdown(prev => {
+            if (prev <= 1) {
+              if (countdownIntervalRef.current) {
+                clearInterval(countdownIntervalRef.current);
+              }
+              setShowEndCountdown(false);
+              onEnded();
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
       }
     };
     const handleVolumeChange = () => {
@@ -142,9 +172,18 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
       if (saveProgressIntervalRef.current) {
         clearInterval(saveProgressIntervalRef.current);
       }
-      updatePlayHistory(videoId, video.currentTime).catch(console.error);
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
+      const progressPercent = (video.currentTime / (duration || 1)) * 100;
+      updatePlayHistory(videoId, progressPercent).catch(console.error);
     };
-  }, [durationSeconds, videoId, initialProgress, hasSetInitialProgress]);
+  }, [durationSeconds, videoId, initialProgress, hasSetInitialProgress, hasNext, onEnded]);
+
+  // 检查精灵图是否存在
+  useEffect(() => {
+    checkSpriteExists(videoId).then(exists => setSpriteAvailable(exists));
+  }, [videoId]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -166,6 +205,38 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
     return () => window.removeEventListener('seekTo', handleSeekTo);
   }, []);
 
+  // 进度条拖动处理
+  useEffect(() => {
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (!isDraggingProgress) return;
+      const video = videoRef.current;
+      const progress = progressRef.current;
+      if (!video || !progress || duration <= 0) return;
+
+      const rect = progress.getBoundingClientRect();
+      const percentage = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const newTime = percentage * duration;
+      video.currentTime = newTime;
+      setCurrentTime(newTime);
+      setPreviewTime(newTime);
+      setPreviewPosition(percentage * 100);
+    };
+
+    const handleGlobalMouseUp = () => {
+      setIsDraggingProgress(false);
+    };
+
+    if (isDraggingProgress) {
+      document.addEventListener('mousemove', handleGlobalMouseMove);
+      document.addEventListener('mouseup', handleGlobalMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [isDraggingProgress, duration]);
+
   // 显示音量指示器
   const displayVolumeIndicator = () => {
     setShowVolumeIndicator(true);
@@ -185,6 +256,34 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
 
       // 忽略输入框中的按键
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      // 倒计时期间的特殊处理
+      if (showEndCountdown) {
+        switch (e.key) {
+          case ' ':
+            e.preventDefault();
+            // 关闭倒计时
+            if (countdownIntervalRef.current) {
+              clearInterval(countdownIntervalRef.current);
+            }
+            setShowEndCountdown(false);
+            break;
+          case 'ArrowLeft':
+            e.preventDefault();
+            // 快退并关闭倒计时
+            video.currentTime = Math.max(0, video.currentTime - 2);
+            if (countdownIntervalRef.current) {
+              clearInterval(countdownIntervalRef.current);
+            }
+            setShowEndCountdown(false);
+            break;
+          case 'ArrowRight':
+            e.preventDefault();
+            // 右箭头不反应
+            break;
+        }
         return;
       }
 
@@ -257,7 +356,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
         clearInterval(seekIntervalRef.current);
       }
     };
-  }, [duration]);
+  }, [duration, showEndCountdown]);
 
   const formatTime = (seconds: number) => {
     if (!isFinite(seconds) || seconds < 0) return '0:00';
@@ -391,15 +490,36 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
         </div>
       )}
 
+      {/* 视频结束倒计时弹窗 */}
+      {showEndCountdown && (
+        <div className="absolute inset-0 flex items-center justify-center z-40">
+          <div className="bg-black/80 rounded-lg px-4 py-3 flex items-center gap-3">
+            <span className="text-white text-sm">即将播放下一个视频</span>
+            <span className="text-primary text-2xl font-bold">{countdown}</span>
+            <button
+              onClick={() => {
+                if (countdownIntervalRef.current) {
+                  clearInterval(countdownIntervalRef.current);
+                }
+                setShowEndCountdown(false);
+              }}
+              className="text-white/80 text-xs hover:text-white transition-colors"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
       {showControls && (
         <>
           {/* 底部渐变 */}
-          <div className="absolute inset-0 bg-linear-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
+          <div className="absolute bottom-0 left-0 right-0 h-20 bg-linear-to-t from-black/30 to-transparent pointer-events-none" />
           
           {/* 全屏时的顶部渐变和标题 */}
           {isFullscreen && (
             <>
-              <div className="absolute inset-0 bg-linear-to-b from-black/50 via-transparent to-transparent pointer-events-none" />
+              <div className="absolute top-0 left-0 right-0 h-20 bg-linear-to-b from-black/20 to-transparent pointer-events-none" />
               <div className="absolute top-4 left-4 text-left pointer-events-none z-10">
                 {title && (
                   <div className="text-white text-lg font-bold mb-1 drop-shadow-lg line-clamp-2 max-w-md">
@@ -421,25 +541,34 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
             <div className="px-4 pt-2">
               <div
                 ref={progressRef}
-                className="relative h-1 bg-white/30 rounded-full cursor-pointer hover:h-2 transition-all"
+                className={`relative bg-white/30 rounded-full cursor-pointer transition-all ${isDraggingProgress ? 'h-2' : 'h-1 hover:h-2'}`}
                 onClick={handleProgressClick}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setIsDraggingProgress(true);
+                  handleProgressClick(e as unknown as MouseEvent<HTMLDivElement>);
+                }}
                 onMouseMove={handleProgressMouseMove}
                 onMouseEnter={handleProgressMouseEnter}
                 onMouseLeave={handleProgressMouseLeave}
               >
                 <div
                   className="absolute h-full bg-primary rounded-full"
-                  style={{ width: `${progress}%` }}
+                  style={{ width: `${isDraggingProgress ? previewPosition : progress}%` }}
                 />
                 <div
-                  className="absolute w-3 h-3 bg-white rounded-full -top-1 shadow-lg opacity-0 hover:opacity-100 transition-opacity"
-                  style={{ left: `calc(${progress}% - 6px)` }}
+                  className={`absolute w-3 h-3 bg-white rounded-full -top-1 shadow-lg transition-opacity ${isDraggingProgress ? 'opacity-100' : 'opacity-0 hover:opacity-100'}`}
+                  style={{ left: `calc(${isDraggingProgress ? previewPosition : progress}% - 6px)` }}
                 />
 
-                {isHoveringProgress && duration > 0 && (
+                {(isHoveringProgress || isDraggingProgress) && duration > 0 && (
                   <div
-                    className="absolute transform -translate-x-1/2 pointer-events-none z-20"
-                    style={{ left: `${previewPosition}%`, bottom: '1rem' }}
+                    className="absolute pointer-events-none z-20"
+                    style={{ 
+                      left: `${previewPosition < 10 ? 10 : previewPosition > 90 ? 90 : previewPosition}%`,
+                      bottom: '1rem',
+                      transform: 'translateX(-50%)'
+                    }}
                   >
                     <div className="flex flex-col items-center gap-1">
                       <div 
@@ -449,14 +578,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
                           aspectRatio: '16/9'
                         }}
                       >
-                        <img
-                          src={spriteUrl}
-                          alt=""
-                          className="hidden"
-                          onLoad={() => setSpriteLoaded(true)}
-                          onError={() => setSpriteError(true)}
-                        />
-                        {!spriteError && spriteLoaded ? (
+                        {spriteAvailable === true ? (
                           <div
                             className="w-full h-full"
                             style={{
@@ -486,7 +608,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
             </div>
 
             {/* 控制按钮栏 */}
-            <div className="px-4 py-3 flex items-center justify-between">
+            <div className="px-4 py-3 flex items-center justify-between select-none">
               {/* 左侧：上一个、播放/暂停、下一个、时间 */}
               <div className="flex items-center gap-1">
                 {hasPrev && (
@@ -495,7 +617,10 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
                     className="w-10 h-10 flex items-center justify-center text-white hover:text-primary transition-colors"
                     title="上一个视频"
                   >
-                    <span className="material-symbols-outlined text-2xl">skip_previous</span>
+                    <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current">
+                      <polygon points="6,12 18,4 18,20" />
+                      <rect x="4" y="5" width="2" height="14" />
+                    </svg>
                   </button>
                 )}
 
@@ -503,9 +628,16 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
                   onClick={handlePlayPause}
                   className="w-12 h-12 flex items-center justify-center text-white hover:text-primary transition-colors"
                 >
-                  <span className="material-symbols-outlined text-3xl">
-                    {isPlaying ? 'pause' : 'play_arrow'}
-                  </span>
+                  {isPlaying ? (
+                    <svg viewBox="0 0 24 24" className="w-8 h-8 fill-current">
+                      <rect x="6" y="5" width="3" height="14" rx="0.5" />
+                      <rect x="15" y="5" width="3" height="14" rx="0.5" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" className="w-8 h-8 fill-current">
+                      <polygon points="8,5 19,12 8,19" />
+                    </svg>
+                  )}
                 </button>
 
                 {hasNext && (
@@ -514,7 +646,10 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
                     className="w-10 h-10 flex items-center justify-center text-white hover:text-primary transition-colors"
                     title="下一个视频"
                   >
-                    <span className="material-symbols-outlined text-2xl">skip_next</span>
+                    <svg viewBox="0 0 24 24" className="w-6 h-6 fill-current">
+                      <polygon points="18,12 6,4 6,20" />
+                      <rect x="18" y="5" width="2" height="14" />
+                    </svg>
                   </button>
                 )}
 

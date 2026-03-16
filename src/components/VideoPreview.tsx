@@ -1,5 +1,5 @@
 import { useState, useRef, MouseEvent, useEffect } from 'react';
-import { getThumbnailUrl } from '../api';
+import { getThumbnailUrl, checkSpriteExists } from '../api';
 
 interface VideoPreviewProps {
   videoId: number;
@@ -24,12 +24,10 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
   // 封面 URL
   const coverUrl = getThumbnailUrl(videoId);
 
-  // 组件加载时检查精灵图是否存在（使用 fetch 避免控制台报错）
+  // 组件加载时通过 API 检查精灵图是否存在
   useEffect(() => {
-    fetch(spriteUrl, { method: 'HEAD' })
-      .then(response => setSpriteAvailable(response.ok))
-      .catch(() => setSpriteAvailable(false));
-  }, [spriteUrl]);
+    checkSpriteExists(videoId).then(exists => setSpriteAvailable(exists));
+  }, [videoId]);
 
   // 鼠标移动时计算预览索引
   const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
@@ -96,7 +94,7 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
       {/* 非悬浮时的底部渐变和元素 */}
       {!showSpritePreview && (
         <>
-          <div className="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/70 to-transparent pointer-events-none" />
+          <div className="absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-black/30 to-transparent pointer-events-none" />
           {/* 播放量 - 左下角 */}
           {views && (
             <div className="absolute bottom-1.5 left-2 flex items-center gap-0.5 text-white text-[10px] font-bold leading-none pointer-events-none z-10">
@@ -117,19 +115,19 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
       {/* 悬浮且有精灵图时显示预览 */}
       {showSpritePreview && (
         <div className="absolute inset-0 bg-slate-800">
-          {/* 精灵图预览帧 */}
+          {/* 精灵图预览帧 - 只有在确认精灵图存在时才加载 */}
           <div
             className="w-full h-full"
-            style={{
+            style={spriteAvailable === true ? {
               backgroundImage: `url(${spriteUrl})`,
               backgroundPosition: `${backgroundPositionX}% ${backgroundPositionY}%`,
               backgroundSize: `${cols * 100}% ${rows * 100}%`,
               backgroundRepeat: 'no-repeat'
-            }}
+            } : {}}
           />
 
           {/* 底部渐变 */}
-          <div className="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/70 to-transparent pointer-events-none" />
+          <div className="absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-black/30 to-transparent pointer-events-none" />
 
           {/* 时间指示器 */}
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">

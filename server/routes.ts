@@ -287,10 +287,11 @@ router.get('/videos/:id/same-category', (req: Request, res: Response) => {
     }
 
     let sql = `
-      SELECT v.*, a.name as author_name, c.name as category_name
+      SELECT v.*, a.name as author_name, c.name as category_name, ph.last_played_at
       FROM videos v
       LEFT JOIN authors a ON v.author_id = a.id
       LEFT JOIN categories c ON v.category_id = c.id
+      LEFT JOIN play_history ph ON v.id = ph.video_id
       WHERE v.category_id = ?
     `;
     const params: any[] = [video.category_id];
@@ -328,7 +329,8 @@ router.get('/videos/:id/same-category', (req: Request, res: Response) => {
       fileSize: formatFileSize(v.file_size || 0),
       category: v.category_name || '其他',
       width: v.width,
-      height: v.height
+      height: v.height,
+      lastPlayedAt: v.last_played_at
     }));
 
     res.json({
@@ -501,6 +503,19 @@ router.delete('/videos/:id', (req: Request, res: Response) => {
   } catch (error) {
     console.error('删除视频失败:', error);
     res.status(500).json({ success: false, error: '删除视频失败' });
+  }
+});
+
+// 检查精灵图是否存在
+router.get('/videos/:id/sprite-exists', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    const spritePath = path.join(previewsDir, `${id}_sprite.jpg`);
+    const exists = fs.existsSync(spritePath);
+    res.json({ exists });
+  } catch (error) {
+    res.json({ exists: false });
   }
 });
 
@@ -2029,13 +2044,16 @@ router.post('/videos/:id/play-history', (req: Request, res: Response) => {
     const { id } = req.params;
     const { progress } = req.body;
 
+    // 使用本地时间 (UTC+8)
+    const now = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+
     getDb().prepare(`
       INSERT INTO play_history (video_id, play_progress, last_played_at)
-      VALUES (?, ?, CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?)
       ON CONFLICT(video_id) DO UPDATE SET
         play_progress = excluded.play_progress,
         last_played_at = excluded.last_played_at
-    `).run(id, progress || 0);
+    `).run(id, progress || 0, now);
 
     res.json({ success: true });
   } catch (error) {

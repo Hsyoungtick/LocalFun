@@ -17,7 +17,7 @@ import {
   Category
 } from '../api';
 import CustomVideoPlayer, { CustomVideoPlayerRef } from './CustomVideoPlayer';
-import VideoPreview from './VideoPreview';
+import VideoCard from './VideoCard';
 
 export default function VideoDetail() {
   const { id } = useParams();
@@ -30,7 +30,7 @@ export default function VideoDetail() {
   const [sortBy, setSortBy] = useState('created_at');
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [activeTab, setActiveTab] = useState<'subtitles' | 'frames'>('subtitles');
+  const [activeTab, setActiveTab] = useState<'playlist' | 'subtitles' | 'frames'>('playlist');
   const [showMoveDialog, setShowMoveDialog] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [showAddFrameDialog, setShowAddFrameDialog] = useState(false);
@@ -38,6 +38,13 @@ export default function VideoDetail() {
   const [frameNote, setFrameNote] = useState('');
   const [editingFrameId, setEditingFrameId] = useState<number | null>(null);
   const videoPlayerRef = useRef<CustomVideoPlayerRef>(null);
+  const playlistContainerRef = useRef<HTMLDivElement>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'info' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 2000);
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -67,12 +74,55 @@ export default function VideoDetail() {
       .catch(console.error);
   }, [id, sortBy, sortOrder]);
 
+  // 定期刷新播放列表以更新上次播放时间
+  useEffect(() => {
+    if (!id) return;
+    
+    const interval = setInterval(() => {
+      getSameCategoryVideos(parseInt(id), { sort: sortBy, order: sortOrder, limit: 20 })
+        .then(setSameCategoryVideos)
+        .catch(console.error);
+    }, 10000); // 每10秒刷新一次
+
+    // 页面可见性变化时刷新
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        getSameCategoryVideos(parseInt(id), { sort: sortBy, order: sortOrder, limit: 20 })
+          .then(setSameCategoryVideos)
+          .catch(console.error);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [id, sortBy, sortOrder]);
+
+  // 自动滚动到当前播放的视频
+  useEffect(() => {
+    if (!video || activeTab !== 'playlist') return;
+    
+    const timer = setTimeout(() => {
+      const container = playlistContainerRef.current;
+      const activeElement = container?.querySelector('.bg-primary\\/10') as HTMLElement;
+      if (container && activeElement) {
+        // 只滚动播放列表容器，不影响整个页面
+        container.scrollTop = activeElement.offsetTop - container.offsetTop;
+      }
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [video?.id, activeTab]);
+
   const handleAddFavoriteFrame = useCallback((timeSeconds: number) => {
     if (!id || !video) return;
     
     addFavoriteFrame(parseInt(id), timeSeconds)
       .then(() => getVideoDetail(parseInt(id)))
       .then(setVideo)
+      .then(() => showToast('已添加喜欢的帧', 'success'))
       .catch(console.error);
   }, [id, video]);
 
@@ -118,6 +168,7 @@ export default function VideoDetail() {
     likeVideo(parseInt(id))
       .then(({ likeCount }) => {
         setVideo(prev => prev ? { ...prev, likeCount } : null);
+        showToast('已点赞', 'success');
       })
       .catch(console.error);
   }, [id, video]);
@@ -131,6 +182,7 @@ export default function VideoDetail() {
       .then(() => {
         console.log('收藏状态更新成功');
         setVideo(prev => prev ? { ...prev, isFavorite: newFavorite } : null);
+        showToast(newFavorite ? '已收藏' : '已取消收藏', 'success');
       })
       .catch((error) => {
         console.error('收藏状态更新失败:', error);
@@ -143,6 +195,7 @@ export default function VideoDetail() {
     resetVideoData(parseInt(id))
       .then(() => getVideoDetail(parseInt(id)))
       .then(setVideo)
+      .then(() => showToast('已重置视频数据', 'info'))
       .catch(console.error);
   }, [id]);
 
@@ -150,7 +203,7 @@ export default function VideoDetail() {
     const updatePlayerHeight = () => {
       if (playerContainerRef.current) {
         if (window.innerWidth >= 768) {
-          playerContainerRef.current.style.height = 'calc((75vw - 1rem) * 9 / 16)';
+          playerContainerRef.current.style.height = 'calc((66.67vw - 1rem) * 9 / 16)';
         } else {
           playerContainerRef.current.style.height = 'calc((100vw - 1rem) * 9 / 16)';
         }
@@ -221,7 +274,7 @@ export default function VideoDetail() {
       {/* 第一行：视频信息（左）+ 作者信息（右） */}
       <div className="flex flex-col md:flex-row gap-4 md:gap-6">
         {/* 左侧：视频信息 */}
-        <div className="w-full md:w-3/4 flex flex-col gap-1">
+        <div className="w-full md:w-2/3 flex flex-col gap-1">
           <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">{video.title}</h1>
           <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400 flex-wrap">
             <span className="flex items-center gap-1">
@@ -238,8 +291,9 @@ export default function VideoDetail() {
         </div>
 
         {/* 右侧：作者信息 */}
-        <div className="w-full md:w-1/4">
+        <div className="w-full md:w-1/3">
           <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm h-full flex items-center gap-3">
+            <span className="material-symbols-outlined text-2xl text-primary">person</span>
             <div className="flex-1 min-w-0">
               <Link 
                 to={video.author ? `/author/${video.author.name}` : '#'} 
@@ -258,7 +312,7 @@ export default function VideoDetail() {
       {/* 第二行：播放器（左）+ 标签页（右） */}
       <div className="flex flex-col md:flex-row gap-4 md:gap-6">
         {/* 左侧：播放器 */}
-        <div className="w-full md:w-3/4 flex flex-col justify-between">
+        <div className="w-full md:w-2/3 flex flex-col justify-between">
           <div 
             ref={playerContainerRef}
             className="relative group rounded-xl overflow-hidden bg-black"
@@ -349,40 +403,76 @@ export default function VideoDetail() {
         </div>
 
         {/* 右侧：标签页 */}
-        <div className="w-full md:w-1/4 flex flex-col">
-          <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm flex flex-col overflow-hidden max-h-[calc((100vw-1rem)*9/16)] md:max-h-[calc((75vw-1rem)*9/16)]">
+        <div className="w-full md:w-1/3 flex flex-col min-w-0">
+          <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm flex flex-col overflow-hidden w-full min-w-0 max-h-[calc((100vw-1rem)*9/16)] md:max-h-[calc((66.67vw-1rem)*9/16)]">
             {/* 标签导航 */}
             <div className="flex gap-1 mb-4 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg shrink-0">
               <button
-                onClick={() => setActiveTab('frames')}
-                className={`flex-1 px-2 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap overflow-hidden text-ellipsis ${
-                  activeTab === 'frames'
+                onClick={() => setActiveTab('playlist')}
+                className={`flex-1 px-2 py-2 rounded-md transition-all flex items-center justify-center w-10 ${
+                  activeTab === 'playlist'
                     ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
+                title="播放列表"
               >
-                喜欢的帧
+                <span className="material-symbols-outlined text-xl">list</span>
               </button>
               <button
                 onClick={() => setActiveTab('subtitles')}
-                className={`flex-1 px-2 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap overflow-hidden text-ellipsis ${
+                className={`flex-1 px-2 py-2 rounded-md transition-all flex items-center justify-center w-10 ${
                   activeTab === 'subtitles'
                     ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
+                title="字幕"
               >
-                字幕
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="2" y="4" width="20" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/>
+                  <rect x="5" y="14" width="6" height="2" rx="0.5" />
+                  <rect x="13" y="14" width="6" height="2" rx="0.5" />
+                  <rect x="5" y="10" width="4" height="2" rx="0.5" />
+                  <rect x="11" y="10" width="8" height="2" rx="0.5" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setActiveTab('frames')}
+                className={`flex-1 px-2 py-2 rounded-md transition-all flex items-center justify-center w-10 ${
+                  activeTab === 'frames'
+                    ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+                title="喜欢的帧"
+              >
+                <span className="material-symbols-outlined text-xl">thumb_up</span>
               </button>
             </div>
 
             {/* 标签内容 */}
-            <div className="flex-1 overflow-y-auto no-scrollbar">
-              {activeTab === 'subtitles' ? (
-                <div className="text-sm text-slate-400 text-center py-4 flex items-center justify-center h-full">
+            <div ref={playlistContainerRef} className="flex-1 overflow-y-auto no-scrollbar min-w-0">
+              {activeTab === 'playlist' ? (
+                <div className="space-y-2 w-full min-w-0">
+                  {sameCategoryVideos.length === 0 ? (
+                    <div className="text-sm text-slate-400 text-center py-4">
+                      暂无相关视频
+                    </div>
+                  ) : (
+                    sameCategoryVideos.map((v) => (
+                      <VideoCard
+                        key={v.id}
+                        video={v}
+                        variant="playlist"
+                        isActive={v.id === video.id}
+                      />
+                    ))
+                  )}
+                </div>
+              ) : activeTab === 'subtitles' ? (
+                <div className="text-sm text-slate-400 text-center py-4 flex items-center justify-center h-full w-full">
                   暂无字幕
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-3 w-full">
                   {video.favoriteFrames.length === 0 ? (
                     <div className="text-sm text-slate-400 text-center py-4">
                       暂无喜欢的帧
@@ -540,85 +630,14 @@ export default function VideoDetail() {
         </div>
       )}
 
-      {/* 第三行：播放列表 */}
-      <div className="flex flex-col md:flex-row gap-4 md:gap-6">
-        <div className="w-full">
-          <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary">playlist_play</span> 播放列表
-              </h3>
-              <div className="flex items-center gap-2">
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
-                  className="h-8 px-2 rounded-lg bg-white dark:bg-slate-800 text-xs border border-slate-200 dark:border-slate-700 outline-none"
-                >
-                  <option value="created_at">修改时间</option>
-                  <option value="random">随机</option>
-                  <option value="views">播放量</option>
-                  <option value="duration">时长</option>
-                  <option value="size">大小</option>
-                  <option value="author">作者</option>
-                </select>
-                <button
-                  onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
-                  className="h-8 px-2 rounded-lg bg-white dark:bg-slate-800 text-xs border border-slate-200 dark:border-slate-700 flex items-center gap-1"
-                >
-                  <span className="material-symbols-outlined text-sm">
-                    {sortOrder === 'desc' ? 'arrow_downward' : 'arrow_upward'}
-                  </span>
-                  {sortOrder === 'desc' ? '降序' : '升序'}
-                </button>
-                <span className="text-xs text-slate-500">共 {sameCategoryVideos.length} 个视频</span>
-              </div>
-            </div>
-            
-            {sameCategoryVideos.length === 0 ? (
-              <div className="text-sm text-slate-400 text-center py-8">
-                暂无相关视频
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                {sameCategoryVideos.map((relatedVideo) => (
-                  <div
-                    onClick={() => navigate(`/video/${relatedVideo.id}`)}
-                    key={relatedVideo.id}
-                    className="group flex flex-col gap-2 cursor-pointer"
-                  >
-                    <div className="relative overflow-hidden rounded-xl aspect-video bg-slate-200 dark:bg-slate-700">
-                      <VideoPreview
-                        videoId={relatedVideo.id}
-                        duration={relatedVideo.durationSeconds}
-                        title={relatedVideo.title}
-                        views={relatedVideo.views}
-                      />
-                    </div>
-                    <div className="flex flex-col min-w-0">
-                      <h4 className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 hover:text-primary transition-colors">
-                        {relatedVideo.title}
-                      </h4>
-                      <div className="text-slate-500 dark:text-slate-400 text-xs mt-1 flex items-center gap-1 flex-wrap">
-                        <Link
-                          onClick={(e) => e.stopPropagation()}
-                          to={`/author/${relatedVideo.author}`}
-                          className="hover:text-primary transition-colors"
-                        >
-                          {relatedVideo.author}
-                        </Link>
-                        <span>·</span>
-                        <span>{relatedVideo.time}</span>
-                        <span>·</span>
-                        <span>#{relatedVideo.category}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+      {/* Toast 提示 */}
+      {toast && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 animate-fade-in">
+          <div className={`px-4 py-2 rounded-lg shadow-lg ${toast.type === 'success' ? 'bg-pink-500' : 'bg-slate-700'} text-white text-sm`}>
+            {toast.message}
           </div>
         </div>
-      </div>
+      )}
     </main>
   );
 }
