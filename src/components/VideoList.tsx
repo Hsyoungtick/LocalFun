@@ -1,10 +1,9 @@
 import { Link, useNavigate } from 'react-router-dom';
-import React, { useState } from 'react';
-import { Video } from '../api';
+import React, { useState, useEffect } from 'react';
+import { Video, getAuthors, getCategories, renameVideo, moveVideo, openVideoFile, Author, Category } from '../api';
 import VideoPreview from './VideoPreview';
-import ContextMenu from './ContextMenu';
+import VideoContextMenu from './VideoContextMenu';
 import EditDialog from './EditDialog';
-import { renameVideo } from '../api';
 import PageLayout from './PageLayout';
 
 interface VideoListProps {
@@ -25,6 +24,9 @@ interface VideoListProps {
   extraButtons?: React.ReactNode;
   showEditMenu?: boolean;
   onVideosUpdate?: () => void;
+  totalVideos?: number;
+  showTitleEdit?: boolean;
+  onTitleEdit?: () => void;
 }
 
 export default function VideoList({
@@ -44,41 +46,49 @@ export default function VideoList({
   onPageChange,
   extraButtons,
   showEditMenu = false,
-  onVideosUpdate
+  onVideosUpdate,
+  totalVideos,
+  showTitleEdit,
+  onTitleEdit
 }: VideoListProps) {
   const navigate = useNavigate();
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    type: 'title' | 'author';
     video: Video;
   } | null>(null);
   const [editDialog, setEditDialog] = useState<{
     isOpen: boolean;
-    type: 'title' | 'author';
+    type: 'title';
     video: Video;
   } | null>(null);
+  const [authors, setAuthors] = useState<Author[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
 
-  const handleTitleContextMenu = (e: React.MouseEvent, video: Video) => {
+  useEffect(() => {
+    if (showEditMenu) {
+      getAuthors().then(data => {
+        console.log('加载作者列表:', data);
+        setAuthors(data);
+      }).catch(err => {
+        console.error('加载作者失败:', err);
+      });
+      getCategories().then(data => {
+        console.log('加载分类列表:', data);
+        setCategories(data);
+      }).catch(err => {
+        console.error('加载分类失败:', err);
+      });
+    }
+  }, [showEditMenu]);
+
+  const handleContextMenu = (e: React.MouseEvent, video: Video) => {
     if (!showEditMenu) return;
     e.preventDefault();
     e.stopPropagation();
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
-      type: 'title',
-      video
-    });
-  };
-
-  const handleAuthorContextMenu = (e: React.MouseEvent, video: Video) => {
-    if (!showEditMenu) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      type: 'author',
       video
     });
   };
@@ -87,13 +97,47 @@ export default function VideoList({
     setContextMenu(null);
   };
 
-  const handleEdit = () => {
+  const handleEditTitle = () => {
     if (contextMenu) {
       setEditDialog({
         isOpen: true,
-        type: contextMenu.type,
+        type: 'title',
         video: contextMenu.video
       });
+    }
+  };
+
+  const handleChangeAuthor = async (authorName: string) => {
+    if (!contextMenu) return;
+    console.log(`修改作者: videoId=${contextMenu.video.id}, authorName=${authorName}`);
+    try {
+      await renameVideo(contextMenu.video.id, { newAuthor: authorName });
+      console.log('修改作者成功');
+      onVideosUpdate?.();
+    } catch (error) {
+      console.error('修改作者失败:', error);
+      alert('修改作者失败');
+    }
+  };
+
+  const handleMoveToCategory = async (categoryName: string) => {
+    if (!contextMenu) return;
+    try {
+      await moveVideo(contextMenu.video.id, categoryName);
+      onVideosUpdate?.();
+    } catch (error) {
+      console.error('移动失败:', error);
+      alert('移动失败');
+    }
+  };
+
+  const handleOpenFile = async () => {
+    if (!contextMenu) return;
+    try {
+      await openVideoFile(contextMenu.video.id);
+    } catch (error) {
+      console.error('打开文件失败:', error);
+      alert('打开文件失败');
     }
   };
 
@@ -103,8 +147,6 @@ export default function VideoList({
     try {
       if (editDialog.type === 'title') {
         await renameVideo(editDialog.video.id, { newTitle: newValue });
-      } else {
-        await renameVideo(editDialog.video.id, { newAuthor: newValue });
       }
       onVideosUpdate?.();
     } catch (error) {
@@ -122,11 +164,11 @@ export default function VideoList({
           <select
             value={sortBy}
             onChange={(e) => onSortByChange(e.target.value)}
-            className="h-9 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm border-none outline-none"
+            className="h-9 px-3 rounded-lg bg-white dark:bg-slate-800 text-sm border border-slate-200 dark:border-slate-700 outline-none"
           >
+            <option value="created_at">修改时间</option>
             <option value="random">随机</option>
             <option value="last_played">上次观看</option>
-            <option value="created_at">修改时间</option>
             <option value="views">播放量</option>
             <option value="duration">时长</option>
             <option value="size">大小</option>
@@ -134,14 +176,19 @@ export default function VideoList({
             <option value="category">类别</option>
           </select>
           {sortOrder !== undefined && onSortOrderChange && (
-            <button
-              onClick={onSortOrderChange}
-              className="h-9 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm flex items-center"
-            >
-              <span className="material-symbols-outlined text-sm">
-                {sortOrder === 'desc' ? 'arrow_downward' : 'arrow_upward'}
-              </span>
-            </button>
+            <>
+              <button
+                onClick={onSortOrderChange}
+                className="h-9 px-3 rounded-lg bg-white dark:bg-slate-800 text-sm border border-slate-200 dark:border-slate-700 flex items-center"
+              >
+                <span className="material-symbols-outlined text-sm">
+                  {sortOrder === 'desc' ? 'arrow_downward' : 'arrow_upward'}
+                </span>
+              </button>
+              {totalVideos !== undefined && (
+                <span className="text-sm text-slate-500 ml-2">共 {totalVideos} 个视频</span>
+              )}
+            </>
           )}
         </>
       )}
@@ -158,6 +205,8 @@ export default function VideoList({
       emptyText={emptyText}
       emptySubtext={emptySubtext}
       extraButtons={allExtraButtons}
+      showTitleEdit={showTitleEdit}
+      onTitleEdit={onTitleEdit}
     >
       {videos.length > 0 && (
         <>
@@ -165,6 +214,7 @@ export default function VideoList({
             {videos.map((video) => (
               <div
                 onClick={() => navigate(`/video/${video.id}`)}
+                onContextMenu={(e) => handleContextMenu(e, video)}
                 key={video.id}
                 className="group flex flex-col gap-3 cursor-pointer"
               >
@@ -177,25 +227,29 @@ export default function VideoList({
                   />
                 </div>
                 <div className="flex flex-col min-w-0">
-                  <h3 
-                    className={`text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 hover:text-primary transition-colors ${showEditMenu ? 'cursor-context-menu' : ''}`}
-                    onContextMenu={(e) => handleTitleContextMenu(e, video)}
-                  >
+                  <h3 className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 hover:text-primary transition-colors">
                     {video.title}
                   </h3>
                   <div className="text-slate-500 dark:text-slate-400 text-xs mt-1 flex items-center gap-1 flex-wrap">
-                    <Link
-                      onClick={(e) => e.stopPropagation()}
-                      to={`/author/${video.author}`}
-                      className={`hover:text-primary transition-colors ${showEditMenu ? 'cursor-context-menu' : ''}`}
-                      onContextMenu={(e) => handleAuthorContextMenu(e, video)}
-                    >
-                      {video.author}
-                    </Link>
-                    <span>·</span>
+                    {video.author && (
+                      <>
+                        <Link
+                          onClick={(e) => e.stopPropagation()}
+                          to={`/authors/${video.author}`}
+                          className="hover:text-primary transition-colors"
+                        >
+                          {video.author}
+                        </Link>
+                        <span>·</span>
+                      </>
+                    )}
                     <span>{video.time}</span>
-                    <span>·</span>
-                    <span>#{video.category}</span>
+                    {video.category && (
+                      <>
+                        <span>·</span>
+                        <span>#{video.category}</span>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -226,12 +280,20 @@ export default function VideoList({
       )}
       
       {contextMenu && (
-        <ContextMenu
+        <VideoContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
+          videoId={contextMenu.video.id}
+          videoTitle={contextMenu.video.title}
+          videoAuthor={contextMenu.video.author}
+          videoCategory={contextMenu.video.category}
+          authors={authors}
+          categories={categories}
           onClose={handleCloseContextMenu}
-          onEdit={handleEdit}
-          label={contextMenu.type === 'title' ? '标题' : '作者名'}
+          onEditTitle={handleEditTitle}
+          onChangeAuthor={handleChangeAuthor}
+          onMoveToCategory={handleMoveToCategory}
+          onOpenFile={handleOpenFile}
         />
       )}
       
@@ -240,8 +302,8 @@ export default function VideoList({
           isOpen={editDialog.isOpen}
           onClose={() => setEditDialog(null)}
           onSave={handleSaveEdit}
-          initialValue={editDialog.type === 'title' ? editDialog.video.title : editDialog.video.author}
-          label={editDialog.type === 'title' ? '标题' : '作者名'}
+          initialValue={editDialog.video.title}
+          label="标题"
         />
       )}
     </PageLayout>

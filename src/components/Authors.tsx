@@ -1,42 +1,42 @@
 import { useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
-import { getCategories, Category } from '../api';
+import { getAuthors, Author } from '../api';
 import PageLayout from './PageLayout';
 
-export default function Categories() {
+export default function Authors() {
   const navigate = useNavigate();
-  const [categories, setCategories] = useState<Category[]>([]);
+  const [authors, setAuthors] = useState<Author[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getCategories()
-      .then(setCategories)
+    getAuthors()
+      .then(setAuthors)
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
 
-  const handleCategoryClick = (categoryName: string) => {
-    navigate(`/categories/${encodeURIComponent(categoryName)}`);
+  const handleAuthorClick = (authorName: string) => {
+    navigate(`/authors/${encodeURIComponent(authorName)}`);
   };
 
   return (
     <PageLayout
-      title="分类"
-      titleIcon="folder"
+      title="作者"
+      titleIcon="person"
       loading={loading}
-      emptyIcon="folder"
-      emptyText="暂无分类"
+      emptyIcon="person"
+      emptyText="暂无作者"
     >
-      {categories.length > 0 && (
+      {authors.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-          {categories.map((cat) => (
+          {authors.map((author) => (
             <div
-              key={cat.id}
-              onClick={() => handleCategoryClick(cat.name)}
+              key={author.id}
+              onClick={() => handleAuthorClick(author.name)}
               className="flex items-center gap-3 p-4 rounded-xl bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 cursor-pointer hover:shadow-md transition-shadow"
             >
-              <span className="material-symbols-outlined text-2xl text-primary">folder</span>
-              <div className="font-medium text-slate-900 dark:text-slate-100">{cat.name}</div>
+              <span className="material-symbols-outlined text-2xl text-primary">person</span>
+              <div className="font-medium text-slate-900 dark:text-slate-100">{author.name}</div>
             </div>
           ))}
         </div>

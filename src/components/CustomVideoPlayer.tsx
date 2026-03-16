@@ -11,12 +11,15 @@ interface CustomVideoPlayerProps {
   initialProgress?: number;
   onPrev?: () => void;
   onNext?: () => void;
+  onEnded?: () => void;
   hasPrev?: boolean;
   hasNext?: boolean;
 }
 
 export interface CustomVideoPlayerRef {
   getCurrentTime: () => number;
+  isFullscreen: () => boolean;
+  enterFullscreen: () => void;
 }
 
 const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProps>(({ 
@@ -29,11 +32,18 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   initialProgress = 0,
   onPrev,
   onNext,
+  onEnded,
   hasPrev = false,
   hasNext = false
 }, ref) => {
   useImperativeHandle(ref, () => ({
-    getCurrentTime: () => currentTime
+    getCurrentTime: () => currentTime,
+    isFullscreen: () => isFullscreen,
+    enterFullscreen: () => {
+      if (containerRef.current && !isFullscreen) {
+        containerRef.current.requestFullscreen().catch(console.error);
+      }
+    }
   }));
   const videoRef = useRef<HTMLVideoElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
@@ -60,9 +70,9 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   const seekIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const saveProgressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
-  const frameCount = 50;
-  const cols = 10;
-  const rows = 5;
+  const frameCount = 20;
+  const cols = 5;
+  const rows = 4;
   const spriteUrl = `http://localhost:3001/previews/${videoId}_sprite.jpg`;
 
   useEffect(() => {
@@ -103,6 +113,9 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
         saveProgressIntervalRef.current = null;
       }
       updatePlayHistory(videoId, video.currentTime).catch(console.error);
+      if (onEnded) {
+        onEnded();
+      }
     };
     const handleVolumeChange = () => {
       setVolume(video.volume);

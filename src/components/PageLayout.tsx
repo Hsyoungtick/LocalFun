@@ -9,6 +9,8 @@ interface PageLayoutProps {
   emptySubtext?: string;
   extraButtons?: React.ReactNode;
   children?: React.ReactNode;
+  showTitleEdit?: boolean;
+  onTitleEdit?: () => void;
 }
 
 export default function PageLayout({
@@ -19,7 +21,9 @@ export default function PageLayout({
   emptyText,
   emptySubtext,
   extraButtons,
-  children
+  children,
+  showTitleEdit,
+  onTitleEdit
 }: PageLayoutProps) {
   const hasContent = children && !React.Children.toArray(children).every(child => !child);
   
@@ -35,6 +39,16 @@ export default function PageLayout({
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
             {title}
           </h1>
+          {showTitleEdit && (
+            <button
+              onClick={onTitleEdit}
+              className="flex items-center"
+            >
+              <span className="material-symbols-outlined text-xl text-slate-500 hover:text-primary">
+                edit
+              </span>
+            </button>
+          )}
         </div>
         {extraButtons && (
           <div className="flex items-center gap-2">

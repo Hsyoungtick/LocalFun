@@ -1,25 +1,21 @@
 import { useState, useEffect } from 'react';
-import { getVideos, getCategories, getFavoriteVideos, getHistoryVideos, Video, Category } from '../api';
+import { getVideos, getFavoriteVideos, getHistoryVideos, Video } from '../api';
 import VideoList from './VideoList';
 import { useAppContext } from '../context/AppContext';
 
 export default function Home() {
-  const { selectedCategory, searchQuery, activeFilter } = useAppContext();
+  const { searchQuery, activeFilter } = useAppContext();
   const [videos, setVideos] = useState<Video[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sortBy, setSortBy] = useState('random');
+  const [sortBy, setSortBy] = useState('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-
-  useEffect(() => {
-    getCategories().then(setCategories).catch(console.error);
-  }, []);
+  const [totalVideos, setTotalVideos] = useState(0);
 
   useEffect(() => {
     setPage(1);
-  }, [selectedCategory, searchQuery, activeFilter]);
+  }, [searchQuery, activeFilter]);
 
   const loadVideos = async () => {
     setLoading(true);
@@ -43,7 +39,6 @@ export default function Home() {
         });
       } else {
         data = await getVideos({
-          category: selectedCategory,
           search: searchQuery || undefined,
           sort: sortBy,
           order: sortOrder,
@@ -53,6 +48,7 @@ export default function Home() {
       }
       setVideos(data.videos);
       setTotalPages(data.totalPages);
+      setTotalVideos(data.total);
     } catch (error) {
       console.error(error);
     } finally {
@@ -62,7 +58,7 @@ export default function Home() {
 
   useEffect(() => {
     loadVideos();
-  }, [selectedCategory, searchQuery, sortBy, sortOrder, page, activeFilter]);
+  }, [searchQuery, sortBy, sortOrder, page, activeFilter]);
 
   const getPageTitle = () => {
     if (activeFilter === 'favorites') return '我的收藏';
@@ -93,7 +89,7 @@ export default function Home() {
       videos={videos}
       loading={loading}
       title={getPageTitle()}
-      titleIcon={activeFilter === 'favorites' ? 'bookmark' : activeFilter === 'history' ? 'history' : 'video_library'}
+      titleIcon={getEmptyIcon()}
       emptyIcon={getEmptyIcon()}
       emptyText={getEmptyText()}
       emptySubtext={getEmptySubtext()}
@@ -106,6 +102,7 @@ export default function Home() {
       onPageChange={setPage}
       showEditMenu={true}
       onVideosUpdate={loadVideos}
+      totalVideos={activeFilter === 'all' ? totalVideos : videos.length}
     />
   );
 }

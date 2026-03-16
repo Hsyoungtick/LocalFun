@@ -2,10 +2,12 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import Home from './components/Home';
-import Profile from './components/Profile';
 import VideoDetail from './components/VideoDetail';
 import Settings from './components/Settings';
 import Categories from './components/Categories';
+import CategoryDetail from './components/CategoryDetail';
+import Authors from './components/Authors';
+import AuthorDetail from './components/AuthorDetail';
 import Favorites from './components/Favorites';
 import History from './components/History';
 import { AppProvider } from './context/AppContext';
@@ -18,10 +20,12 @@ export default function App() {
           <Header />
           <Routes>
             <Route path="/" element={<Home />} />
-            <Route path="/author/:username" element={<Profile />} />
             <Route path="/video/:id" element={<VideoDetail />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/categories" element={<Categories />} />
+            <Route path="/categories/:name" element={<CategoryDetail />} />
+            <Route path="/authors" element={<Authors />} />
+            <Route path="/authors/:name" element={<AuthorDetail />} />
             <Route path="/favorites" element={<Favorites />} />
             <Route path="/history" element={<History />} />
           </Routes>

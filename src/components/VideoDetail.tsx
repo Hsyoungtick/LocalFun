@@ -177,13 +177,21 @@ export default function VideoDetail() {
 
   const handlePrev = useCallback(() => {
     if (prevVideo) {
+      const wasFullscreen = videoPlayerRef.current?.isFullscreen() || false;
       navigate(`/video/${prevVideo.id}`);
+      if (wasFullscreen) {
+        setTimeout(() => videoPlayerRef.current?.enterFullscreen(), 100);
+      }
     }
   }, [prevVideo, navigate]);
 
   const handleNext = useCallback(() => {
     if (nextVideo) {
+      const wasFullscreen = videoPlayerRef.current?.isFullscreen() || false;
       navigate(`/video/${nextVideo.id}`);
+      if (wasFullscreen) {
+        setTimeout(() => videoPlayerRef.current?.enterFullscreen(), 100);
+      }
     }
   }, [nextVideo, navigate]);
 
@@ -266,6 +274,7 @@ export default function VideoDetail() {
               initialProgress={video.playProgress || 0}
               onPrev={handlePrev}
               onNext={handleNext}
+              onEnded={handleNext}
               hasPrev={!!prevVideo}
               hasNext={!!nextVideo}
             />
@@ -531,22 +540,22 @@ export default function VideoDetail() {
         </div>
       )}
 
-      {/* 第三行：相关视频 */}
+      {/* 第三行：播放列表 */}
       <div className="flex flex-col md:flex-row gap-4 md:gap-6">
         <div className="w-full">
           <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary">auto_awesome</span> 相关视频
+                <span className="material-symbols-outlined text-primary">playlist_play</span> 播放列表
               </h3>
               <div className="flex items-center gap-2">
                 <select
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value)}
-                  className="h-8 px-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-xs border-none outline-none"
+                  className="h-8 px-2 rounded-lg bg-white dark:bg-slate-800 text-xs border border-slate-200 dark:border-slate-700 outline-none"
                 >
-                  <option value="random">随机</option>
                   <option value="created_at">修改时间</option>
+                  <option value="random">随机</option>
                   <option value="views">播放量</option>
                   <option value="duration">时长</option>
                   <option value="size">大小</option>
@@ -554,7 +563,7 @@ export default function VideoDetail() {
                 </select>
                 <button
                   onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
-                  className="h-8 px-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-xs flex items-center gap-1"
+                  className="h-8 px-2 rounded-lg bg-white dark:bg-slate-800 text-xs border border-slate-200 dark:border-slate-700 flex items-center gap-1"
                 >
                   <span className="material-symbols-outlined text-sm">
                     {sortOrder === 'desc' ? 'arrow_downward' : 'arrow_upward'}

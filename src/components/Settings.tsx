@@ -268,7 +268,7 @@ export default function Settings() {
     }
     
     // 如果该路径正在扫描，则暂停
-    if (pathProgress[pathId]?.status === 'scanning' || pathProgress[pathId]?.status === 'generating_previews') {
+    if (pathProgress[pathId]?.status === 'scanning') {
       try {
         await stopScan(pathId);
         stopProgressPolling(pathId);
@@ -284,6 +284,18 @@ export default function Settings() {
     setImportResult(null);
     setError(null);
     setSuccess(null);
+    
+    // 立即设置状态为 scanning，让按钮立即变成暂停
+    setPathProgress(prev => ({
+      ...prev,
+      [pathId]: {
+        status: 'scanning',
+        current: 0,
+        total: 0,
+        phase: '准备扫描...',
+        videoCount: 0
+      }
+    }));
     
     startProgressPolling(pathId);
     
@@ -336,6 +348,18 @@ export default function Settings() {
     setImportResult(null);
     setError(null);
     setSuccess(null);
+    
+    // 立即设置状态为 generating_previews，让按钮立即变成暂停
+    setPathProgress(prev => ({
+      ...prev,
+      [pathId]: {
+        status: 'generating_previews',
+        current: 0,
+        total: 0,
+        phase: '准备生成预览图...',
+        videoCount: 0
+      }
+    }));
     
     startProgressPolling(pathId);
     
@@ -604,11 +628,11 @@ export default function Settings() {
                   <div className="flex gap-2 flex-shrink-0">
                     <button
                       onClick={() => handleImport(p.id, p.path)}
-                      disabled={isAnyPathScanning && !pausedPaths.has(p.id) && pathProgress[p.id]?.status !== 'scanning' && pathProgress[p.id]?.status !== 'generating_previews'}
+                      disabled={isAnyPathScanning && !pausedPaths.has(p.id) && pathProgress[p.id]?.status !== 'scanning'}
                       className={`h-8 px-3 rounded text-xs font-medium transition-colors ${
                         pausedPaths.has(p.id)
                           ? 'bg-green-100 text-green-600 hover:bg-green-200 cursor-pointer'
-                          : (pathProgress[p.id]?.status === 'scanning' || pathProgress[p.id]?.status === 'generating_previews')
+                          : pathProgress[p.id]?.status === 'scanning'
                             ? 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200 cursor-pointer'
                             : isAnyPathScanning
                               ? 'bg-primary/10 text-primary opacity-50 cursor-not-allowed'
@@ -617,14 +641,14 @@ export default function Settings() {
                       title={
                         pausedPaths.has(p.id)
                           ? '继续导入'
-                          : (pathProgress[p.id]?.status === 'scanning' || pathProgress[p.id]?.status === 'generating_previews')
+                          : pathProgress[p.id]?.status === 'scanning'
                             ? '暂停导入'
                             : '导入数据和封面'
                       }
                     >
                       {pausedPaths.has(p.id)
                         ? '继续'
-                        : (pathProgress[p.id]?.status === 'scanning' || pathProgress[p.id]?.status === 'generating_previews')
+                        : pathProgress[p.id]?.status === 'scanning'
                           ? '暂停'
                           : '导入'
                       }
@@ -653,7 +677,7 @@ export default function Settings() {
                         ? '继续'
                         : pathProgress[p.id]?.status === 'generating_previews'
                           ? '暂停'
-                          : '预览图'
+                          : '生成预览图'
                       }
                     </button>
                     <button

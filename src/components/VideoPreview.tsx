@@ -16,9 +16,9 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
   const [spriteError, setSpriteError] = useState(false);
   const [coverError, setCoverError] = useState(false);
   
-  const frameCount = 30;
-  const cols = 6;
-  const rows = 5;
+  const frameCount = 20;
+  const cols = 5;
+  const rows = 4;
 
   // 精灵图 URL
   const spriteUrl = `http://localhost:3001/previews/${videoId}_sprite.jpg`;
@@ -57,7 +57,7 @@ export default function VideoPreview({ videoId, duration, title, views }: VideoP
   };
 
   // 计算当前预览帧对应的时间
-  const currentTime = (previewIndex + 1) / frameCount * duration;
+  const currentTime = previewIndex / frameCount * duration;
 
   // 计算精灵图位置
   // 精灵图布局: 10列 x 5行

@@ -34,12 +34,12 @@ export interface Video {
   title: string;
   duration: string;
   durationSeconds: number;
-  author: string;
+  author?: string;
   views: string;
   viewsCount: number;
   time: string;
   fileSize: string;
-  category: string;
+  category?: string;
   width?: number;
   height?: number;
   lastPlayedAt?: string;
@@ -96,6 +96,8 @@ export interface Author {
     views: string;
     viewsCount: number;
     time: string;
+    author?: string;
+    category?: string;
   }[];
 }
 
@@ -422,6 +424,43 @@ export async function renameAuthor(id: number, newName: string): Promise<string>
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ newName })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.message;
+}
+
+// 批量修改分类名
+export async function renameCategory(id: number, newName: string): Promise<string> {
+  const response = await fetch(`${API_BASE}/categories/${id}/rename`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newName })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.message;
+}
+
+// 移动视频到其他分类
+export async function moveVideo(id: number, categoryName: string): Promise<string> {
+  const response = await fetch(`${API_BASE}/videos/${id}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ categoryName })
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.message;
+}
+
+// 打开视频源文件所在目录
+export async function openVideoFile(id: number): Promise<string> {
+  const response = await fetch(`${API_BASE}/videos/${id}/open`, {
+    method: 'POST'
   });
   const data = await response.json();
   

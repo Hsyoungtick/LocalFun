@@ -5,6 +5,7 @@ import { addVideoToDatabase, refreshAllVideos, scanAndAddVideos, scanProgress, g
 const PREVIEW_PARALLEL_LIMIT = 4;
 import fs from 'fs';
 import path from 'path';
+import { exec } from 'child_process';
 
 const router = Router();
 
@@ -98,7 +99,7 @@ router.get('/videos', (req: Request, res: Response) => {
     }
 
     // 作者筛选
-    if (author) {
+    if (author && author !== '全部') {
       sql += ' AND a.name = ?';
       params.push(author);
     }
@@ -138,6 +139,7 @@ router.get('/videos', (req: Request, res: Response) => {
       SELECT COUNT(*) as total
       FROM videos v
       LEFT JOIN categories c ON v.category_id = c.id
+      LEFT JOIN authors a ON v.author_id = a.id
       WHERE 1=1
     `;
     const countParams: any[] = [];
@@ -145,6 +147,11 @@ router.get('/videos', (req: Request, res: Response) => {
     if (category && category !== '全部') {
       countSql += ' AND c.name = ?';
       countParams.push(category);
+    }
+    
+    if (author && author !== '全部') {
+      countSql += ' AND a.name = ?';
+      countParams.push(author);
     }
     
     if (search) {
@@ -284,9 +291,9 @@ router.get('/videos/:id/same-category', (req: Request, res: Response) => {
       FROM videos v
       LEFT JOIN authors a ON v.author_id = a.id
       LEFT JOIN categories c ON v.category_id = c.id
-      WHERE v.category_id = ? AND v.id != ?
+      WHERE v.category_id = ?
     `;
-    const params: any[] = [video.category_id, id];
+    const params: any[] = [video.category_id];
 
     // 排序
     let orderClause = '';
@@ -487,6 +494,9 @@ router.delete('/videos/:id', (req: Request, res: Response) => {
     
     getDb().prepare('DELETE FROM videos WHERE id = ?').run(id);
     
+    // 清理没有视频的作者
+    getDb().prepare('DELETE FROM authors WHERE id NOT IN (SELECT DISTINCT author_id FROM videos WHERE author_id IS NOT NULL)').run();
+    
     res.json({ success: true, message: '删除成功' });
   } catch (error) {
     console.error('删除视频失败:', error);
@@ -515,6 +525,86 @@ router.get('/categories', (req: Request, res: Response) => {
   } catch (error) {
     console.error('获取分类失败:', error);
     res.status(500).json({ success: false, error: '获取分类失败' });
+  }
+});
+
+// 批量修改分类名（修改该分类所有视频的文件夹名）
+router.put('/categories/:id/rename', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { newName } = req.body;
+
+    if (!newName) {
+      return res.status(400).json({ success: false, error: '分类名不能为空' });
+    }
+
+    const category = getDb().prepare('SELECT * FROM categories WHERE id = ?').get(id) as any;
+    if (!category) {
+      return res.status(404).json({ success: false, error: '分类不存在' });
+    }
+
+    const oldName = category.name;
+    
+    // 获取该分类的所有视频
+    const videos = getDb().prepare('SELECT * FROM videos WHERE category_id = ?').all(id) as any[];
+    let successCount = 0;
+    let failCount = 0;
+
+    // 按文件夹分组
+    const folderMap = new Map<string, string[]>();
+    for (const video of videos) {
+      const dir = path.dirname(video.file_path);
+      if (!folderMap.has(dir)) {
+        folderMap.set(dir, []);
+      }
+      folderMap.get(dir)!.push(video.file_path);
+    }
+
+    // 处理每个文件夹
+    for (const [oldDir, filePaths] of folderMap) {
+      try {
+        const parentDir = path.dirname(oldDir);
+        const oldFolderName = path.basename(oldDir);
+        
+        // 检查文件夹名是否包含旧分类名
+        if (oldFolderName === oldName || oldFolderName.includes(oldName)) {
+          const newFolderName = oldFolderName.replace(oldName, newName);
+          const newDir = path.join(parentDir, newFolderName);
+          
+          // 直接重命名文件夹
+          if (fs.existsSync(oldDir) && !fs.existsSync(newDir)) {
+            fs.renameSync(oldDir, newDir);
+          } else if (!fs.existsSync(newDir)) {
+            // 旧文件夹不存在，创建新文件夹
+            fs.mkdirSync(newDir, { recursive: true });
+          }
+          
+          // 更新数据库中的文件路径
+          for (const oldFilePath of filePaths) {
+            const newFilePath = path.join(newDir, path.basename(oldFilePath));
+            const updateVideo = getDb().prepare('UPDATE videos SET file_path = ? WHERE file_path = ?');
+            updateVideo.run(newFilePath, oldFilePath);
+          }
+        }
+        
+        successCount += filePaths.length;
+      } catch (e) {
+        console.error(`修改文件夹 ${oldDir} 失败:`, e);
+        failCount += filePaths.length;
+      }
+    }
+
+    // 更新分类名
+    const updateCategory = getDb().prepare('UPDATE categories SET name = ? WHERE id = ?');
+    updateCategory.run(newName, id);
+
+    res.json({ 
+      success: true, 
+      message: `修改完成，成功 ${successCount} 个，失败 ${failCount} 个` 
+    });
+  } catch (error) {
+    console.error('批量修改分类名失败:', error);
+    res.status(500).json({ success: false, error: '修改失败' });
   }
 });
 
@@ -557,10 +647,11 @@ router.get('/authors/:name', (req: Request, res: Response) => {
 
     // 获取作者的视频
     const videos = getDb().prepare(`
-      SELECT id, title, duration, view_count, file_modified_at, created_at
-      FROM videos
-      WHERE author_id = ?
-      ORDER BY file_modified_at DESC
+      SELECT v.id, v.title, v.duration, v.view_count, v.file_modified_at, v.created_at, c.name as category_name
+      FROM videos v
+      LEFT JOIN categories c ON v.category_id = c.id
+      WHERE v.author_id = ?
+      ORDER BY v.file_modified_at DESC
     `).all(author.id) as any[];
 
     // 统计数据
@@ -587,7 +678,9 @@ router.get('/authors/:name', (req: Request, res: Response) => {
           durationSeconds: v.duration || 0,
           views: formatViews(v.view_count || 0),
           viewsCount: v.view_count || 0,
-          time: formatDate(v.file_modified_at || v.created_at)
+          time: formatDate(v.file_modified_at || v.created_at),
+          author: author.name,
+          category: v.category_name
         }))
       }
     });
@@ -793,6 +886,9 @@ router.post('/paths/:id/clear', async (req: Request, res: Response) => {
       DELETE FROM videos WHERE file_path LIKE ? OR file_path LIKE ?
     `).run(`${normalizedPath}%`, `${pathValue}%`);
     
+    // 清理没有视频的作者
+    getDb().prepare('DELETE FROM authors WHERE id NOT IN (SELECT DISTINCT author_id FROM videos WHERE author_id IS NOT NULL)').run();
+    
     // 清除该路径的扫描进度
     clearScanProgressFromDb(parseInt(id));
     
@@ -913,6 +1009,9 @@ router.delete('/paths/:id', async (req: Request, res: Response) => {
     getDb().prepare(`
       DELETE FROM videos WHERE file_path LIKE ? OR file_path LIKE ?
     `).run(`${normalizedPath}%`, `${pathValue}%`);
+    
+    // 清理没有视频的作者
+    getDb().prepare('DELETE FROM authors WHERE id NOT IN (SELECT DISTINCT author_id FROM videos WHERE author_id IS NOT NULL)').run();
     
     // 删除该路径的扫描进度
     clearScanProgressFromDb(parseInt(id));
@@ -1072,26 +1171,27 @@ router.post('/generate-previews', async (req: Request, res: Response) => {
       if (videosWithoutPreview.length > 0) {
         progress.status = 'generating_previews';
         progress.total = videosWithoutPreview.length;
+        progress.current = 0;
         progress.phase = `生成预览图(0/${videosWithoutPreview.length})...`;
         
-        let completed = 0;
-        for (let i = 0; i < videosWithoutPreview.length; i += PREVIEW_PARALLEL_LIMIT) {
+        for (let i = 0; i < videosWithoutPreview.length; i++) {
           if (shouldStopScan(pathId)) {
+            progress.status = 'idle';
+            progress.phase = `已暂停(${progress.current}/${videosWithoutPreview.length})`;
+            saveScanProgressToDb(progress, pathId);
             break;
           }
           
-          const batch = videosWithoutPreview.slice(i, i + PREVIEW_PARALLEL_LIMIT);
-          await Promise.all(batch.map(async (videoId) => {
-            const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(videoId) as any;
-            if (video) {
-              progress.currentFile = path.basename(video.file_path);
-            }
-            await generateSpriteForVideo(videoId);
-          }));
+          const videoId = videosWithoutPreview[i];
+          const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(videoId) as any;
+          if (video) {
+            progress.currentFile = path.basename(video.file_path);
+            progress.phase = `生成预览图(${i + 1}/${videosWithoutPreview.length}): ${path.basename(video.file_path)}`;
+          }
           
-          completed += batch.length;
-          progress.current = completed;
-          progress.phase = `生成预览图(${completed}/${videosWithoutPreview.length})...`;
+          await generateSpriteForVideo(videoId);
+          
+          progress.current = i + 1;
         }
       }
       
@@ -1182,6 +1282,9 @@ router.post('/rescan', async (req: Request, res: Response) => {
       // 从数据库删除这些视频（同时匹配正斜杠和反斜杠格式）
       getDb().prepare(`DELETE FROM videos WHERE file_path LIKE ? OR file_path LIKE ?`).run(`${normalizedPath}%`, `${scanPath}%`);
       console.log(`已从数据库删除 ${videos.length} 个视频记录`);
+      
+      // 清理没有视频的作者
+      getDb().prepare('DELETE FROM authors WHERE id NOT IN (SELECT DISTINCT author_id FROM videos WHERE author_id IS NOT NULL)').run();
       
       // 检查并重置自增计数器
       const videoCount = getDb().prepare('SELECT COUNT(*) as count FROM videos').get() as { count: number };
@@ -1453,6 +1556,8 @@ router.put('/videos/:id/rename', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { newTitle, newAuthor } = req.body;
+    
+    console.log(`收到重命名请求: id=${id}, newTitle=${newTitle}, newAuthor=${newAuthor}`);
 
     const video = getDb().prepare('SELECT * FROM videos WHERE id = ?').get(id) as any;
     if (!video) {
@@ -1463,22 +1568,40 @@ router.put('/videos/:id/rename', async (req: Request, res: Response) => {
     const ext = path.extname(oldFilePath);
     const dir = path.dirname(oldFilePath);
     let newFileName = '';
+    let finalTitle = newTitle || video.title;
     
-    // 如果提供了 newAuthor，保留或添加作者名前缀
+    console.log(`原文件路径: ${oldFilePath}, 扩展名: ${ext}, 目录: ${dir}`);
+    
+    // 如果提供了 newAuthor（包括空字符串表示清除作者）
     if (newAuthor !== undefined) {
-      newFileName = `【${newAuthor}】${newTitle || video.title}${ext}`;
+      if (newAuthor && newAuthor.trim()) {
+        // 有新作者名
+        newFileName = `【${newAuthor.trim()}】${finalTitle}${ext}`;
+        console.log(`设置新作者: ${newAuthor.trim()}, 新文件名: ${newFileName}`);
+      } else {
+        // 清除作者，直接用标题
+        newFileName = `${finalTitle}${ext}`;
+        console.log(`清除作者, 新文件名: ${newFileName}`);
+      }
     } else {
       // 从原文件名中提取作者名（如果有）
       const oldFileName = path.basename(oldFilePath, ext);
       const authorMatch = oldFileName.match(/^【(.+?)】(.*)$/);
       if (authorMatch) {
-        newFileName = `【${authorMatch[1]}】${newTitle || video.title}${ext}`;
+        if (newTitle) {
+          // 只修改标题，保留作者
+          newFileName = `【${authorMatch[1]}】${newTitle}${ext}`;
+        } else {
+          // 不修改任何东西
+          newFileName = oldFileName + ext;
+        }
       } else {
-        newFileName = `${newTitle || video.title}${ext}`;
+        newFileName = `${finalTitle}${ext}`;
       }
     }
     
     const newFilePath = path.join(dir, newFileName);
+    console.log(`新文件路径: ${newFilePath}`);
 
     // 检查新路径是否已存在
     if (fs.existsSync(newFilePath) && newFilePath !== oldFilePath) {
@@ -1491,19 +1614,19 @@ router.put('/videos/:id/rename', async (req: Request, res: Response) => {
       console.log(`重命名文件: ${oldFilePath} -> ${newFilePath}`);
     }
 
-    // 更新数据库
-    const updateVideo = getDb().prepare('UPDATE videos SET title = ?, file_path = ? WHERE id = ?');
-    updateVideo.run(newTitle || video.title, newFilePath, id);
+    // 更新数据库中的标题和路径
+    const updateVideoPath = getDb().prepare('UPDATE videos SET title = ?, file_path = ? WHERE id = ?');
+    updateVideoPath.run(finalTitle, newFilePath, id);
 
     // 如果修改了作者，同时更新作者信息
     if (newAuthor !== undefined) {
       let authorId: number | null = null;
-      if (newAuthor) {
-        let authorResult = getDb().prepare('SELECT id FROM authors WHERE name = ?').get(newAuthor);
+      if (newAuthor && newAuthor.trim()) {
+        let authorResult = getDb().prepare('SELECT id FROM authors WHERE name = ?').get(newAuthor.trim());
         if (authorResult) {
           authorId = (authorResult as any).id;
         } else {
-          const insertAuthor = getDb().prepare('INSERT INTO authors (name) VALUES (?)').run(newAuthor);
+          const insertAuthor = getDb().prepare('INSERT INTO authors (name) VALUES (?)').run(newAuthor.trim());
           authorId = insertAuthor.lastInsertRowid as number;
         }
       }
@@ -1515,6 +1638,68 @@ router.put('/videos/:id/rename', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('修改视频失败:', error);
     res.status(500).json({ success: false, error: '修改失败' });
+  }
+});
+
+// 移动视频到其他分类
+router.put('/videos/:id/move', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { categoryName } = req.body;
+
+    if (!categoryName) {
+      return res.status(400).json({ success: false, error: '分类名不能为空' });
+    }
+
+    const video = getDb().prepare('SELECT * FROM videos WHERE id = ?').get(id) as any;
+    if (!video) {
+      return res.status(404).json({ success: false, error: '视频不存在' });
+    }
+
+    // 获取或创建目标分类
+    let categoryResult = getDb().prepare('SELECT id FROM categories WHERE name = ?').get(categoryName);
+    let categoryId: number;
+    
+    if (categoryResult) {
+      categoryId = (categoryResult as any).id;
+    } else {
+      const insertCategory = getDb().prepare('INSERT INTO categories (name) VALUES (?)').run(categoryName);
+      categoryId = insertCategory.lastInsertRowid as number;
+    }
+
+    // 更新视频的分类
+    const updateVideo = getDb().prepare('UPDATE videos SET category_id = ? WHERE id = ?');
+    updateVideo.run(categoryId, id);
+
+    res.json({ success: true, message: '移动成功' });
+  } catch (error) {
+    console.error('移动视频失败:', error);
+    res.status(500).json({ success: false, error: '移动失败' });
+  }
+});
+
+// 打开视频源文件所在目录
+router.post('/videos/:id/open', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    
+    const video = getDb().prepare('SELECT * FROM videos WHERE id = ?').get(id) as any;
+    if (!video) {
+      return res.status(404).json({ success: false, error: '视频不存在' });
+    }
+
+    const filePath = video.file_path;
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, error: '文件不存在' });
+    }
+
+    // 使用 Windows 命令打开文件所在目录并选中文件
+    exec(`explorer /select,"${filePath}"`);
+    
+    res.json({ success: true, message: '已打开文件所在目录' });
+  } catch (error) {
+    console.error('打开文件失败:', error);
+    res.status(500).json({ success: false, error: '打开文件失败' });
   }
 });
 

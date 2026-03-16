@@ -488,13 +488,13 @@ export async function generateSprite(filePath: string, videoId: number, duration
   ensureDirs();
 
   const spritePath = path.join(previewsDir, `${videoId}_sprite.jpg`);
-  const frameCount = 30;
-  const frameWidth = 320;
-  const frameHeight = 180;
-  const cols = 6; // 每行6帧
-  const rows = 5;  // 5行
+  const frameCount = 20;
+  const frameWidth = 160;
+  const frameHeight = 90;
+  const cols = 5; // 每行5帧
+  const rows = 4;  // 4行
 
-  // 并行提取50帧，每帧使用快速seek
+  // 并行提取帧，每帧使用快速seek
   const tempFrames: string[] = [];
   
   const promises = [];

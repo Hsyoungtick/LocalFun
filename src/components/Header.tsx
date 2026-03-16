@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { getCategories, getFavoriteVideos, getHistoryVideos, Category, Video, getThumbnailUrl, formatSmartTime } from '../api';
+import { getCategories, getFavoriteVideos, getHistoryVideos, getAuthors, Category, Video, Author, getThumbnailUrl, formatSmartTime } from '../api';
 
 export default function Header() {
   const navigate = useNavigate();
@@ -9,12 +9,15 @@ export default function Header() {
   const [isHidden, setIsHidden] = useState(false);
   const [lastScrollY, setLastScrollY] = useState(0);
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  const [showAuthorDropdown, setShowAuthorDropdown] = useState(false);
   const [showFavoritesDropdown, setShowFavoritesDropdown] = useState(false);
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [authors, setAuthors] = useState<Author[]>([]);
   const [favoritesVideos, setFavoritesVideos] = useState<Video[]>([]);
   const [historyVideos, setHistoryVideos] = useState<Video[]>([]);
   const categoryDropdownRef = useRef<HTMLDivElement>(null);
+  const authorDropdownRef = useRef<HTMLDivElement>(null);
   const favoritesDropdownRef = useRef<HTMLDivElement>(null);
   const historyDropdownRef = useRef<HTMLDivElement>(null);
   const { searchQuery, setSearchQuery } = useAppContext();
@@ -36,6 +39,7 @@ export default function Header() {
 
   useEffect(() => {
     getCategories().then(setCategories).catch(console.error);
+    getAuthors().then(setAuthors).catch(console.error);
     loadFavorites();
     loadHistory();
   }, []);
@@ -77,12 +81,21 @@ export default function Header() {
   };
 
   const handleCategoryClick = (category: string) => {
-    navigate('/');
+    navigate(`/categories/${encodeURIComponent(category)}`);
     setShowCategoryDropdown(false);
   };
 
   const handleCategoryButtonClick = () => {
     navigate('/categories');
+  };
+
+  const handleAuthorClick = (author: string) => {
+    navigate(`/authors/${encodeURIComponent(author)}`);
+    setShowAuthorDropdown(false);
+  };
+
+  const handleAuthorButtonClick = () => {
+    navigate('/authors');
   };
 
   const handleFavoritesButtonClick = () => {
@@ -125,7 +138,7 @@ export default function Header() {
               onMouseEnter={() => setShowCategoryDropdown(true)}
               onMouseLeave={() => setShowCategoryDropdown(false)}
             >
-              <span className="material-symbols-outlined hover:text-pink-500">category</span>
+              <span className="material-symbols-outlined hover:text-pink-500">folder</span>
             </button>
           </div>
           {showCategoryDropdown && (
@@ -138,12 +151,6 @@ export default function Header() {
                 className="absolute top-full mt-2 w-48 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 py-2 z-50 max-h-[calc(100vh-200px)] overflow-y-auto"
                 style={{ right: 'auto', left: '50%', transform: 'translateX(-45%)' }}
               >
-                <div
-                  onClick={() => handleCategoryClick('全部')}
-                  className="px-4 py-2 cursor-pointer transition-colors text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
-                >
-                  全部视频
-                </div>
                 {categories.map((cat) => (
                   <div
                     key={cat.id}
@@ -151,6 +158,41 @@ export default function Header() {
                     className="px-4 py-2 cursor-pointer transition-colors text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
                   >
                     {cat.name}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="relative" ref={authorDropdownRef}>
+          <div>
+            <button 
+              className="rounded-lg transition-colors flex items-center justify-center cursor-pointer text-slate-600 dark:text-slate-400"
+              title="作者"
+              onClick={handleAuthorButtonClick}
+              onMouseEnter={() => setShowAuthorDropdown(true)}
+              onMouseLeave={() => setShowAuthorDropdown(false)}
+            >
+              <span className="material-symbols-outlined hover:text-pink-500">person</span>
+            </button>
+          </div>
+          {showAuthorDropdown && (
+            <div 
+              onMouseEnter={() => setShowAuthorDropdown(true)}
+              onMouseLeave={() => setShowAuthorDropdown(false)}
+            >
+              <div className="absolute top-full left-0 right-0 h-2"></div>
+              <div 
+                className="absolute top-full mt-2 w-48 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 py-2 z-50 max-h-[calc(100vh-200px)] overflow-y-auto"
+                style={{ right: 'auto', left: '50%', transform: 'translateX(-45%)' }}
+              >
+                {authors.map((author) => (
+                  <div
+                    key={author.id}
+                    onClick={() => handleAuthorClick(author.name)}
+                    className="px-4 py-2 cursor-pointer transition-colors text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                  >
+                    {author.name}
                   </div>
                 ))}
               </div>
