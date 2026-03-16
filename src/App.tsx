@@ -1,6 +1,5 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './components/Header';
-import Footer from './components/Footer';
 import Home from './components/Home';
 import VideoDetail from './components/VideoDetail';
 import Settings from './components/Settings';
@@ -29,7 +28,6 @@ export default function App() {
             <Route path="/favorites" element={<Favorites />} />
             <Route path="/history" element={<History />} />
           </Routes>
-          <Footer />
         </div>
       </Router>
     </AppProvider>

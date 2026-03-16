@@ -436,7 +436,7 @@ router.post('/videos/:id/favorite', (req: Request, res: Response) => {
 });
 
 // 更新视频信息
-router.put('/videos/:id', (req: Request, res: Response) => {
+router.put('/videos/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { title, description, author_id, category_id } = req.body;
@@ -467,6 +467,9 @@ router.put('/videos/:id', (req: Request, res: Response) => {
 
     params.push(id);
     getDb().prepare(`UPDATE videos SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+
+    // 暂时禁用备注写入功能，避免文件损坏
+    // TODO: 需要更安全的实现方式
 
     res.json({ success: true, message: '更新成功' });
   } catch (error) {

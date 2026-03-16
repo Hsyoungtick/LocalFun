@@ -14,7 +14,10 @@ import {
   likeVideo,
   toggleFavorite,
   getCategories,
-  Category
+  Category,
+  openVideoFile,
+  updateVideo,
+  renameVideo
 } from '../api';
 import CustomVideoPlayer, { CustomVideoPlayerRef } from './CustomVideoPlayer';
 import VideoCard from './VideoCard';
@@ -37,6 +40,12 @@ export default function VideoDetail() {
   const [tempTimeSeconds, setTempTimeSeconds] = useState(0);
   const [frameNote, setFrameNote] = useState('');
   const [editingFrameId, setEditingFrameId] = useState<number | null>(null);
+  const [showDescriptionDialog, setShowDescriptionDialog] = useState(false);
+  const [description, setDescription] = useState('');
+  const [showEditTitleDialog, setShowEditTitleDialog] = useState(false);
+  const [editingTitle, setEditingTitle] = useState('');
+  const [isTitleOverflow, setIsTitleOverflow] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const videoPlayerRef = useRef<CustomVideoPlayerRef>(null);
   const playlistContainerRef = useRef<HTMLDivElement>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
@@ -57,6 +66,7 @@ export default function VideoDetail() {
       getCategories()
     ]).then(([videoData, categoriesData]) => {
       setVideo(videoData);
+      setDescription(videoData.description || '');
       setCategories(categoriesData);
       setSelectedCategory(videoData.category);
     })
@@ -115,6 +125,21 @@ export default function VideoDetail() {
 
     return () => clearTimeout(timer);
   }, [video?.id, activeTab]);
+
+  // 检测标题是否溢出
+  useEffect(() => {
+    if (!video || !titleRef.current) return;
+    
+    const checkOverflow = () => {
+      if (titleRef.current) {
+        setIsTitleOverflow(titleRef.current.scrollWidth > titleRef.current.clientWidth);
+      }
+    };
+    
+    checkOverflow();
+    window.addEventListener('resize', checkOverflow);
+    return () => window.removeEventListener('resize', checkOverflow);
+  }, [video?.title]);
 
   const handleAddFavoriteFrame = useCallback((timeSeconds: number) => {
     if (!id || !video) return;
@@ -188,6 +213,32 @@ export default function VideoDetail() {
         console.error('收藏状态更新失败:', error);
       });
   }, [id, video]);
+
+  const handleSaveDescription = useCallback(() => {
+    if (!id) return;
+    
+    updateVideo(parseInt(id), { description })
+      .then(() => {
+        setShowDescriptionDialog(false);
+        showToast('简介已保存', 'success');
+        return getVideoDetail(parseInt(id));
+      })
+      .then(setVideo)
+      .catch(console.error);
+  }, [id, description]);
+
+  const handleSaveTitle = useCallback(() => {
+    if (!id || !editingTitle.trim()) return;
+    
+    renameVideo(parseInt(id), { newTitle: editingTitle.trim() })
+      .then(() => {
+        setShowEditTitleDialog(false);
+        showToast('标题已保存', 'success');
+        return getVideoDetail(parseInt(id));
+      })
+      .then(setVideo)
+      .catch(console.error);
+  }, [id, editingTitle]);
 
   const handleResetVideoData = useCallback(() => {
     if (!id) return;
@@ -275,7 +326,31 @@ export default function VideoDetail() {
       <div className="flex flex-col md:flex-row gap-4 md:gap-6">
         {/* 左侧：视频信息 */}
         <div className="w-full md:w-2/3 flex flex-col gap-1">
-          <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100">{video.title}</h1>
+          <div className="flex items-center gap-2">
+            <div className="relative group flex-1 min-w-0">
+              <h1 
+                ref={titleRef}
+                className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate"
+              >
+                {video.title}
+              </h1>
+              {isTitleOverflow && (
+                <div className="absolute left-0 top-0 w-full p-2 bg-white dark:bg-slate-800 text-lg font-bold text-slate-900 dark:text-slate-100 rounded shadow-lg z-50 hidden group-hover:block whitespace-normal border border-slate-200 dark:border-slate-700">
+                  {video.title}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                setEditingTitle(video.title);
+                setShowEditTitleDialog(true);
+              }}
+              className="text-slate-500 hover:text-primary transition-colors flex-shrink-0"
+              title="编辑标题"
+            >
+              <span className="material-symbols-outlined text-xl">edit</span>
+            </button>
+          </div>
           <div className="flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400 flex-wrap">
             <span className="flex items-center gap-1">
               <span className="material-symbols-outlined text-base">visibility</span> {video.views}次观看
@@ -382,11 +457,29 @@ export default function VideoDetail() {
               </button>
 
               <button
-                onClick={() => setShowMoveDialog(true)}
+                onClick={() => openVideoFile(video.id).catch(console.error)}
                 className="flex items-center justify-center w-21 h-15 rounded-lg transition-all group"
+                title="打开源文件"
               >
-                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>drive_file_move</span>
+                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>folder_open</span>
               </button>
+
+              <div className="relative group">
+                <button
+                  onClick={() => {
+                    setDescription(video.description || '');
+                    setShowDescriptionDialog(true);
+                  }}
+                  className="flex items-center justify-center w-21 h-15 rounded-lg transition-all"
+                >
+                  <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>description</span>
+                </button>
+                {video.description && (
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 p-2 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-sm rounded shadow-lg max-w-xs z-50 hidden group-hover:block whitespace-normal border border-slate-200 dark:border-slate-700">
+                    {video.description}
+                  </div>
+                )}
+              </div>
             </div>
 
             <button
@@ -595,15 +688,7 @@ export default function VideoDetail() {
             </h3>
             <div className="mb-4">
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                时间
-              </label>
-              <div className="text-sm text-slate-500 dark:text-slate-400">
-                {Math.floor(tempTimeSeconds / 60)}:{Math.floor(tempTimeSeconds % 60).toString().padStart(2, '0')}
-              </div>
-            </div>
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                注释（可选）
+                注释
               </label>
               <textarea
                 value={frameNote}
@@ -621,6 +706,79 @@ export default function VideoDetail() {
               </button>
               <button
                 onClick={handleSaveFavoriteFrame}
+                className="flex-1 px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 简介编辑对话框 */}
+      {showDescriptionDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-slate-900 rounded-xl p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">
+              编辑简介
+            </h3>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                简介
+              </label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full h-32 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm border-none outline-none resize-none"
+                placeholder="添加简介..."
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDescriptionDialog(false)}
+                className="flex-1 px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSaveDescription}
+                className="flex-1 px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 编辑标题对话框 */}
+      {showEditTitleDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-slate-900 rounded-xl p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">
+              编辑标题
+            </h3>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                标题
+              </label>
+              <input
+                type="text"
+                value={editingTitle}
+                onChange={(e) => setEditingTitle(e.target.value)}
+                className="w-full h-10 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm border-none outline-none"
+                placeholder="输入标题..."
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowEditTitleDialog(false)}
+                className="flex-1 px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSaveTitle}
                 className="flex-1 px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary/90 transition-colors"
               >
                 保存
