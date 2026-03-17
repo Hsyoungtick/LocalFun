@@ -36,3 +36,7 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+.material-symbols-outlined {
+  user-select: none;
+}

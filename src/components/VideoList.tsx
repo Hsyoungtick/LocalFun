@@ -27,6 +27,8 @@ interface VideoListProps {
   totalVideos?: number;
   showTitleEdit?: boolean;
   onTitleEdit?: () => void;
+  groupByDate?: boolean;
+  dateField?: 'lastPlayedAt' | 'createdAt';
 }
 
 interface SelectionBox {
@@ -56,7 +58,9 @@ export default function VideoList({
   onVideosUpdate,
   totalVideos,
   showTitleEdit,
-  onTitleEdit
+  onTitleEdit,
+  groupByDate = false,
+  dateField = 'lastPlayedAt'
 }: VideoListProps) {
   const navigate = useNavigate();
   const [contextMenu, setContextMenu] = useState<{
@@ -349,6 +353,60 @@ export default function VideoList({
     return new Set([...selectedVideoIds, ...selectingVideoIds]);
   }, [selectedVideoIds, selectingVideoIds]);
 
+  // 日期分组逻辑
+  const getDateLabel = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const weekAgo = new Date(today);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const monthAgo = new Date(today);
+    monthAgo.setDate(monthAgo.getDate() - 30);
+
+    const videoDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+    if (videoDate.getTime() === today.getTime()) {
+      return '今天';
+    } else if (videoDate.getTime() === yesterday.getTime()) {
+      return '昨天';
+    } else if (videoDate >= weekAgo) {
+      return '一周内';
+    } else if (videoDate >= monthAgo) {
+      return '一月内';
+    } else {
+      return '更早';
+    }
+  };
+
+  const groupedVideos = useMemo(() => {
+    if (!groupByDate) return null;
+    
+    const groups: { label: string; videos: Video[] }[] = [];
+    const groupMap = new Map<string, Video[]>();
+    
+    videos.forEach(video => {
+      const dateValue = dateField === 'lastPlayedAt' ? video.lastPlayedAt : video.createdAt;
+      if (!dateValue) return;
+      
+      const label = getDateLabel(dateValue);
+      if (!groupMap.has(label)) {
+        groupMap.set(label, []);
+      }
+      groupMap.get(label)!.push(video);
+    });
+
+    const labelOrder = ['今天', '昨天', '一周内', '一月内', '更早'];
+    labelOrder.forEach(label => {
+      if (groupMap.has(label)) {
+        groups.push({ label, videos: groupMap.get(label)! });
+      }
+    });
+
+    return groups;
+  }, [videos, groupByDate, dateField]);
+
   const allExtraButtons = (
     <>
       {highlightedVideoIds.size > 0 && (
@@ -412,61 +470,129 @@ export default function VideoList({
     >
       {videos.length > 0 && (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
-            {videos.map((video, index) => (
-              <div
-                ref={(el) => registerVideoRef(video.id, el)}
-                onClick={(e) => handleVideoClick(e, video, index)}
-                onContextMenu={(e) => handleContextMenu(e, video)}
-                key={video.id}
-                data-video-card
-                className={`group flex flex-col gap-3 cursor-pointer rounded-lg p-1 -m-1 transition-colors ${
-                  highlightedVideoIds.has(video.id) ? 'bg-primary/10 ring-2 ring-primary' : ''
-                }`}
-              >
-                <div className="relative overflow-hidden rounded-xl aspect-video bg-slate-200 dark:bg-slate-700">
-                  <VideoPreview
-                    videoId={video.id}
-                    duration={video.durationSeconds}
-                    title={video.title}
-                    views={video.views}
-                  />
+          {groupByDate && groupedVideos ? (
+            groupedVideos.map((group) => (
+              <div key={group.label} className="mb-8">
+                <div className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-4">
+                  {group.label}
                 </div>
-                <div className="flex flex-col min-w-0">
-                  <h3 className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 hover:text-primary transition-colors">
-                    {video.title}
-                  </h3>
-                  <div className="text-slate-500 dark:text-slate-400 text-xs mt-1 flex items-center gap-1 flex-wrap">
-                    {video.author && (
-                      <>
-                        <Link
-                          onClick={(e) => e.stopPropagation()}
-                          to={`/authors/${video.author}`}
-                          className="hover:text-primary transition-colors"
-                        >
-                          {video.author}
-                        </Link>
-                        <span>·</span>
-                      </>
-                    )}
-                    <span>{video.time}</span>
-                    {video.category && (
-                      <>
-                        <span>·</span>
-                        <Link
-                          onClick={(e) => e.stopPropagation()}
-                          to={`/categories/${video.category}`}
-                          className="hover:text-primary transition-colors cursor-pointer"
-                        >
-                          #{video.category}
-                        </Link>
-                      </>
-                    )}
-                  </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
+                  {group.videos.map((video, index) => {
+                    const globalIndex = videos.findIndex(v => v.id === video.id);
+                    return (
+                      <div
+                        ref={(el) => registerVideoRef(video.id, el)}
+                        onClick={(e) => handleVideoClick(e, video, globalIndex)}
+                        onContextMenu={(e) => handleContextMenu(e, video)}
+                        key={video.id}
+                        data-video-card
+                        className={`group flex flex-col gap-3 cursor-pointer rounded-lg p-1 -m-1 transition-colors ${
+                          highlightedVideoIds.has(video.id) ? 'bg-primary/10 ring-2 ring-primary' : ''
+                        }`}
+                      >
+                        <div className="relative overflow-hidden rounded-xl aspect-video bg-slate-200 dark:bg-slate-700">
+                          <VideoPreview
+                            videoId={video.id}
+                            duration={video.durationSeconds}
+                            title={video.title}
+                            views={video.views}
+                          />
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <h3 className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 hover:text-primary transition-colors">
+                            {video.title}
+                          </h3>
+                          <div className="text-slate-500 dark:text-slate-400 text-xs mt-1 flex items-center gap-1 flex-wrap">
+                            {video.author && (
+                              <>
+                                <Link
+                                  onClick={(e) => e.stopPropagation()}
+                                  to={`/authors/${video.author}`}
+                                  className="hover:text-primary transition-colors"
+                                >
+                                  {video.author}
+                                </Link>
+                                <span>·</span>
+                              </>
+                            )}
+                            <span>{video.time}</span>
+                            {video.category && (
+                              <>
+                                <span>·</span>
+                                <Link
+                                  onClick={(e) => e.stopPropagation()}
+                                  to={`/categories/${video.category}`}
+                                  className="hover:text-primary transition-colors cursor-pointer"
+                                >
+                                  #{video.category}
+                                </Link>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            ))}
-          </div>
+            ))
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
+              {videos.map((video, index) => (
+                <div
+                  ref={(el) => registerVideoRef(video.id, el)}
+                  onClick={(e) => handleVideoClick(e, video, index)}
+                  onContextMenu={(e) => handleContextMenu(e, video)}
+                  key={video.id}
+                  data-video-card
+                  className={`group flex flex-col gap-3 cursor-pointer rounded-lg p-1 -m-1 transition-colors ${
+                    highlightedVideoIds.has(video.id) ? 'bg-primary/10 ring-2 ring-primary' : ''
+                  }`}
+                >
+                  <div className="relative overflow-hidden rounded-xl aspect-video bg-slate-200 dark:bg-slate-700">
+                    <VideoPreview
+                      videoId={video.id}
+                      duration={video.durationSeconds}
+                      title={video.title}
+                      views={video.views}
+                    />
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <h3 className="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight line-clamp-2 hover:text-primary transition-colors">
+                      {video.title}
+                    </h3>
+                    <div className="text-slate-500 dark:text-slate-400 text-xs mt-1 flex items-center gap-1 flex-wrap">
+                      {video.author && (
+                        <>
+                          <Link
+                            onClick={(e) => e.stopPropagation()}
+                            to={`/authors/${video.author}`}
+                            className="hover:text-primary transition-colors"
+                          >
+                            {video.author}
+                          </Link>
+                          <span>·</span>
+                        </>
+                      )}
+                      <span>{video.time}</span>
+                      {video.category && (
+                        <>
+                          <span>·</span>
+                          <Link
+                            onClick={(e) => e.stopPropagation()}
+                            to={`/categories/${video.category}`}
+                            className="hover:text-primary transition-colors cursor-pointer"
+                          >
+                            #{video.category}
+                          </Link>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {totalPages !== undefined && page !== undefined && onPageChange && totalPages > 1 && (
             <div className="flex justify-center items-center gap-2 py-6">
               <button

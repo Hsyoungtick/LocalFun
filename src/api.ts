@@ -44,6 +44,7 @@ export interface Video {
   height?: number;
   lastPlayedAt?: string;
   playProgress?: number;
+  createdAt?: string;
 }
 
 export interface VideoDetail {
