@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db, { initDatabase, dbPath, reloadDatabase, getDb } from './database';
-import { addVideoToDatabase, refreshAllVideos, scanAndAddVideos, scanProgress, generateSpriteForVideo, loadScanProgressFromDb, saveScanProgressToDb, clearScanProgressFromDb, startProgressAutoSave, stopProgressAutoSave, getScanProgress, stopScan, shouldStopScan, waitForAllFfmpegProcesses, findVideoFolders, clearStopScanFlags } from './scanner';
+import { addVideoToDatabase, refreshAllVideos, scanAndAddVideos, scanProgress, generateSpriteForVideo, loadScanProgressFromDb, saveScanProgressToDb, clearScanProgressFromDb, startProgressAutoSave, stopProgressAutoSave, getScanProgress, stopScan, shouldStopScan, waitForAllFfmpegProcesses, findVideoFolders, clearStopScanFlags, getVideoCodecInfo } from './scanner';
+import { spawn, ChildProcess, execSync } from 'child_process';
 
 const PREVIEW_PARALLEL_LIMIT = 4;
 import fs from 'fs';
@@ -8,6 +9,39 @@ import path from 'path';
 import { exec } from 'child_process';
 
 const router = Router();
+
+// 检测可用的硬件加速编码器
+let hardwareEncoder: string | null = null;
+
+function detectHardwareEncoder(): string | null {
+  try {
+    // 检测 NVIDIA NVENC
+    const nvencResult = execSync('ffmpeg -encoders 2>nul | findstr h264_nvenc', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    if (nvencResult.includes('h264_nvenc')) {
+      console.log('检测到 NVIDIA NVENC 硬件加速');
+      return 'h264_nvenc';
+    }
+  } catch (e) {
+    // NVENC 不可用
+  }
+  
+  try {
+    // 检测 Intel QSV
+    const qsvResult = execSync('ffmpeg -encoders 2>nul | findstr h264_qsv', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    if (qsvResult.includes('h264_qsv')) {
+      console.log('检测到 Intel QSV 硬件加速');
+      return 'h264_qsv';
+    }
+  } catch (e) {
+    // QSV 不可用
+  }
+  
+  console.log('未检测到硬件加速，使用 CPU 编码');
+  return null;
+}
+
+// 初始化时检测硬件加速
+hardwareEncoder = detectHardwareEncoder();
 
 // 删除文件（带重试机制）
 function deleteFileWithRetry(filePath: string, maxRetries: number = 5): boolean {
@@ -1340,8 +1374,8 @@ router.post('/rescan', async (req: Request, res: Response) => {
   }
 });
 
-// 视频流播放接口 - 支持Range请求
-router.get('/stream/:id', (req: Request, res: Response) => {
+// 视频流播放接口 - 支持Range请求和实时转码
+router.get('/stream/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
@@ -1359,35 +1393,372 @@ router.get('/stream/:id', (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: '视频文件不存在' });
     }
 
-    const stat = fs.statSync(filePath);
-    const fileSize = stat.size;
-    const range = req.headers.range;
+    // 检测视频编码
+    const codecInfo = await getVideoCodecInfo(filePath);
+    
+    if (codecInfo.needsTranscoding) {
+      if (codecInfo.onlyContainerTranscode) {
+        // 编码支持但容器不支持：先转成临时文件，再支持 Range 请求
+        console.log(`视频 ${id} 快速转码（仅容器）: ${codecInfo.containerFormat} -> mp4 (编码: ${codecInfo.videoCodec})`);
+        
+        // 创建临时目录
+        const tempDir = path.join(process.cwd(), 'data', 'temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        const tempFilePath = path.join(tempDir, `temp_${id}_${Date.now()}.mp4`);
+        
+        const ffmpegArgs = [
+          '-i', filePath,
+          '-c', 'copy',
+          '-movflags', 'faststart',
+          '-y',
+          tempFilePath
+        ];
+        
+        console.log(`执行 ffmpeg: ffmpeg ${ffmpegArgs.join(' ')}`);
+        
+        try {
+          // 先完成转码到临时文件
+          await new Promise<void>((resolve, reject) => {
+            const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+            let ffmpegErrorLog = '';
+            
+            ffmpeg.stderr.on('data', (data) => {
+              ffmpegErrorLog += data.toString();
+            });
+            
+            ffmpeg.on('close', (code) => {
+              if (code !== 0 && code !== null) {
+                console.error(`ffmpeg 转码结束，退出码: ${code}`);
+                console.error(`ffmpeg 错误日志:\n${ffmpegErrorLog}`);
+                reject(new Error('转码失败'));
+              } else {
+                console.log(`视频 ${id} 转码完成，临时文件: ${tempFilePath}`);
+                resolve();
+              }
+            });
+            
+            ffmpeg.on('error', (err) => {
+              console.error('ffmpeg 转码错误:', err);
+              reject(err);
+            });
+          });
+          
+          // 转码成功，用临时文件支持 Range 请求
+          const stat = fs.statSync(tempFilePath);
+          const fileSize = stat.size;
+          const range = req.headers.range;
+          
+          if (range) {
+            // 解析Range头
+            const parts = range.replace(/bytes=/, '').split('-');
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunkSize = end - start + 1;
+            
+            const fileStream = fs.createReadStream(tempFilePath, { start, end });
+            
+            res.writeHead(206, {
+              'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+              'Accept-Ranges': 'bytes',
+              'Content-Length': chunkSize,
+              'Content-Type': 'video/mp4'
+            });
+            
+            fileStream.pipe(res);
+            
+            // 传输完成后删除临时文件
+            fileStream.on('close', () => {
+              setTimeout(() => {
+                try {
+                  if (fs.existsSync(tempFilePath)) {
+                    fs.unlinkSync(tempFilePath);
+                    console.log(`临时文件已删除: ${tempFilePath}`);
+                  }
+                } catch (e) {
+                  console.error('删除临时文件失败:', e);
+                }
+              }, 5000);
+            });
+          } else {
+            // 不带Range头，返回整个文件
+            res.writeHead(200, {
+              'Content-Length': fileSize,
+              'Content-Type': 'video/mp4'
+            });
+            
+            const fileStream = fs.createReadStream(tempFilePath);
+            fileStream.pipe(res);
+            
+            // 传输完成后删除临时文件
+            fileStream.on('close', () => {
+              setTimeout(() => {
+                try {
+                  if (fs.existsSync(tempFilePath)) {
+                    fs.unlinkSync(tempFilePath);
+                    console.log(`临时文件已删除: ${tempFilePath}`);
+                  }
+                } catch (e) {
+                  console.error('删除临时文件失败:', e);
+                }
+              }, 5000);
+            });
+          }
+          
+          // 客户端断开连接时删除临时文件
+          req.on('close', () => {
+            setTimeout(() => {
+              try {
+                if (fs.existsSync(tempFilePath)) {
+                  fs.unlinkSync(tempFilePath);
+                  console.log(`客户端断开连接，删除临时文件: ${tempFilePath}`);
+                }
+              } catch (e) {
+                console.error('删除临时文件失败:', e);
+              }
+            }, 1000);
+          });
+          
+        } catch (err) {
+          // 转码失败，删除临时文件（如果存在）
+          try {
+            if (fs.existsSync(tempFilePath)) {
+              fs.unlinkSync(tempFilePath);
+            }
+          } catch (e) {
+            // 忽略
+          }
+          
+          // 回退到直接流式传输
+          console.log('转码失败，尝试直接流式传输...');
+          try {
+            const stat = fs.statSync(filePath);
+            const fileSize = stat.size;
+            res.writeHead(200, {
+              'Content-Length': fileSize,
+              'Content-Type': 'video/mp4'
+            });
+            fs.createReadStream(filePath).pipe(res);
+          } catch (fallbackErr) {
+            console.error('回退也失败:', fallbackErr);
+            res.status(500).json({ success: false, error: '视频播放失败' });
+          }
+        }
+        
+      } else {
+        // 编码不支持：完整转码，使用缓存机制支持进度拖动
+        console.log(`视频 ${id} 完整转码 (容器: ${codecInfo.containerFormat}, 编码: ${codecInfo.videoCodec} -> h264)`);
+        
+        // 创建转码缓存目录
+        const cacheDir = path.join(process.cwd(), 'data', 'transcode_cache');
+        if (!fs.existsSync(cacheDir)) {
+          fs.mkdirSync(cacheDir, { recursive: true });
+        }
+        
+        // 缓存文件名：基于视频ID和原文件修改时间
+        const originalStat = fs.statSync(filePath);
+        const cacheFileName = `${id}_${originalStat.mtimeMs.toFixed(0)}.mp4`;
+        const cacheFilePath = path.join(cacheDir, cacheFileName);
+        
+        // 检查缓存是否存在
+        let needTranscode = !fs.existsSync(cacheFilePath);
+        
+        if (needTranscode) {
+          // 清理该视频的旧缓存文件
+          try {
+            const oldCacheFiles = fs.readdirSync(cacheDir).filter(f => f.startsWith(`${id}_`));
+            for (const oldFile of oldCacheFiles) {
+              try {
+                fs.unlinkSync(path.join(cacheDir, oldFile));
+                console.log(`清理旧缓存: ${oldFile}`);
+              } catch (e) {
+                // 忽略
+              }
+            }
+          } catch (e) {
+            // 忽略
+          }
+          
+          // 开始转码
+          console.log(`开始转码到缓存: ${cacheFilePath}`);
+          
+          // 根据硬件加速情况选择编码参数
+          let ffmpegArgs: string[];
+          
+          if (hardwareEncoder === 'h264_nvenc') {
+            // NVIDIA NVENC 硬件加速
+            ffmpegArgs = [
+              '-i', filePath,
+              '-c:v', 'h264_nvenc',
+              '-preset', 'p1',
+              '-tune', 'll',
+              '-cq', '28',
+              '-c:a', 'aac',
+              '-b:a', '128k',
+              '-movflags', '+faststart',
+              '-y',
+              cacheFilePath
+            ];
+          } else if (hardwareEncoder === 'h264_qsv') {
+            // Intel QSV 硬件加速
+            ffmpegArgs = [
+              '-i', filePath,
+              '-c:v', 'h264_qsv',
+              '-preset', 'veryfast',
+              '-global_quality', '28',
+              '-c:a', 'aac',
+              '-b:a', '128k',
+              '-movflags', '+faststart',
+              '-y',
+              cacheFilePath
+            ];
+          } else {
+            // CPU 编码（优化参数）
+            ffmpegArgs = [
+              '-i', filePath,
+              '-c:v', 'libx264',
+              '-preset', 'ultrafast',
+              '-tune', 'fastdecode',
+              '-crf', '28',
+              '-threads', '0',
+              '-c:a', 'aac',
+              '-b:a', '128k',
+              '-movflags', '+faststart',
+              '-y',
+              cacheFilePath
+            ];
+          }
+          
+          console.log(`执行 ffmpeg: ffmpeg ${ffmpegArgs.join(' ')}`);
+          
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+              let ffmpegErrorLog = '';
+              
+              ffmpeg.stderr.on('data', (data) => {
+                ffmpegErrorLog += data.toString();
+                if (data.toString().includes('frame=')) {
+                  process.stdout.write(data);
+                }
+              });
+              
+              ffmpeg.on('close', (code) => {
+                if (code !== 0 && code !== null) {
+                  console.error(`ffmpeg 转码结束，退出码: ${code}`);
+                  console.error(`ffmpeg 错误日志:\n${ffmpegErrorLog}`);
+                  reject(new Error('转码失败'));
+                } else {
+                  console.log(`视频 ${id} 转码完成，缓存: ${cacheFilePath}`);
+                  resolve();
+                }
+              });
+              
+              ffmpeg.on('error', (err) => {
+                console.error('ffmpeg 转码错误:', err);
+                reject(err);
+              });
+            });
+          } catch (err) {
+            // 转码失败，删除可能的部分文件
+            try {
+              if (fs.existsSync(cacheFilePath)) {
+                fs.unlinkSync(cacheFilePath);
+              }
+            } catch (e) {
+              // 忽略
+            }
+            
+            // 回退到直接流式传输
+            console.log('转码失败，尝试直接流式传输...');
+            try {
+              const stat = fs.statSync(filePath);
+              const fileSize = stat.size;
+              res.writeHead(200, {
+                'Content-Length': fileSize,
+                'Content-Type': 'video/mp4'
+              });
+              fs.createReadStream(filePath).pipe(res);
+            } catch (fallbackErr) {
+              console.error('回退也失败:', fallbackErr);
+              res.status(500).json({ success: false, error: '视频播放失败' });
+            }
+            return;
+          }
+        } else {
+          console.log(`使用缓存文件: ${cacheFilePath}`);
+        }
+        
+        // 使用缓存文件支持 Range 请求
+        try {
+          const stat = fs.statSync(cacheFilePath);
+          const fileSize = stat.size;
+          const range = req.headers.range;
+          
+          if (range) {
+            const parts = range.replace(/bytes=/, '').split('-');
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunkSize = end - start + 1;
+            
+            const fileStream = fs.createReadStream(cacheFilePath, { start, end });
+            
+            res.writeHead(206, {
+              'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+              'Accept-Ranges': 'bytes',
+              'Content-Length': chunkSize,
+              'Content-Type': 'video/mp4'
+            });
+            
+            fileStream.pipe(res);
+          } else {
+            res.writeHead(200, {
+              'Content-Length': fileSize,
+              'Content-Type': 'video/mp4'
+            });
+            
+            fs.createReadStream(cacheFilePath).pipe(res);
+          }
+        } catch (err) {
+          console.error('读取缓存文件失败:', err);
+          res.status(500).json({ success: false, error: '视频播放失败' });
+        }
+      }
 
-    if (range) {
-      // 解析Range头
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-      const chunkSize = end - start + 1;
-
-      const fileStream = fs.createReadStream(filePath, { start, end });
-      
-      res.writeHead(206, {
-        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type': 'video/mp4'
-      });
-
-      fileStream.pipe(res);
     } else {
-      // 不带Range头，返回整个文件
-      res.writeHead(200, {
-        'Content-Length': fileSize,
-        'Content-Type': 'video/mp4'
-      });
+      // 不需要转码：直接流式传输
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
 
-      fs.createReadStream(filePath).pipe(res);
+      if (range) {
+        // 解析Range头
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunkSize = end - start + 1;
+
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunkSize,
+          'Content-Type': 'video/mp4'
+        });
+
+        fileStream.pipe(res);
+      } else {
+        // 不带Range头，返回整个文件
+        res.writeHead(200, {
+          'Content-Length': fileSize,
+          'Content-Type': 'video/mp4'
+        });
+
+        fs.createReadStream(filePath).pipe(res);
+      }
     }
   } catch (error) {
     console.error('视频流播放失败:', error);

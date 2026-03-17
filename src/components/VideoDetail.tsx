@@ -327,7 +327,7 @@ export default function VideoDetail() {
         {/* 左侧：视频信息 */}
         <div className="w-full md:w-2/3 flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <div className="relative group flex-1 min-w-0">
+            <div className="relative group flex-1 min-w-0 max-w-[calc(100%-2rem)]">
               <h1 
                 ref={titleRef}
                 className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate"
@@ -335,7 +335,7 @@ export default function VideoDetail() {
                 {video.title}
               </h1>
               {isTitleOverflow && (
-                <div className="absolute left-0 top-0 w-full p-2 bg-white dark:bg-slate-800 text-lg font-bold text-slate-900 dark:text-slate-100 rounded shadow-lg z-50 hidden group-hover:block whitespace-normal border border-slate-200 dark:border-slate-700">
+                <div className="absolute left-0 top-0 w-full bg-white dark:bg-slate-800 text-lg font-bold text-slate-900 dark:text-slate-100 rounded shadow-lg z-50 hidden group-hover:block whitespace-normal border border-slate-200 dark:border-slate-700">
                   {video.title}
                 </div>
               )}

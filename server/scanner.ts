@@ -341,6 +341,82 @@ interface VideoInfo {
   size: number;
 }
 
+// 视频编码信息接口
+interface VideoCodecInfo {
+  videoCodec: string;
+  audioCodec: string;
+  containerFormat: string;
+  needsTranscoding: boolean;
+  onlyContainerTranscode: boolean;
+}
+
+// 浏览器原生支持的视频编码
+const BROWSER_SUPPORTED_VIDEO_CODECS = ['h264', 'vp8', 'vp9', 'av1', 'theora'];
+// 浏览器原生支持的音频编码
+const BROWSER_SUPPORTED_AUDIO_CODECS = ['aac', 'mp3', 'opus', 'vorbis', 'flac', 'pcm'];
+// 浏览器原生支持的容器格式
+const BROWSER_SUPPORTED_CONTAINERS = ['mp4', 'webm', 'ogg', 'mov'];
+
+// 检测视频编码格式
+export function getVideoCodecInfo(filePath: string): Promise<VideoCodecInfo> {
+  return new Promise((resolve) => {
+    if (!ffmpegAvailable) {
+      resolve({ videoCodec: 'unknown', audioCodec: 'unknown', containerFormat: 'unknown', needsTranscoding: false, onlyContainerTranscode: false });
+      return;
+    }
+
+    const ffprobe = spawn('ffprobe', [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_format',
+      '-show_streams',
+      filePath
+    ]);
+
+    let output = '';
+
+    ffprobe.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    ffprobe.on('close', (code) => {
+      if (code !== 0) {
+        resolve({ videoCodec: 'unknown', audioCodec: 'unknown', containerFormat: 'unknown', needsTranscoding: false, onlyContainerTranscode: false });
+        return;
+      }
+
+      try {
+        const info = JSON.parse(output);
+        const videoStream = info.streams?.find((s: any) => s.codec_type === 'video');
+        const audioStream = info.streams?.find((s: any) => s.codec_type === 'audio');
+
+        const videoCodec = (videoStream?.codec_name || 'unknown').toLowerCase();
+        const audioCodec = (audioStream?.codec_name || 'unknown').toLowerCase();
+        
+        // 获取容器格式
+        const formatName = (info.format?.format_name || 'unknown').toLowerCase();
+        // 从文件扩展名获取容器格式（更可靠）
+        const ext = path.extname(filePath).toLowerCase().replace('.', '');
+        const containerFormat = ext || formatName.split(',')[0];
+
+        // 检查是否需要转码：编码不支持 或 容器不支持
+        const codecSupported = BROWSER_SUPPORTED_VIDEO_CODECS.includes(videoCodec);
+        const containerSupported = BROWSER_SUPPORTED_CONTAINERS.includes(containerFormat);
+        const needsTranscoding = !codecSupported || !containerSupported;
+        const onlyContainerTranscode = codecSupported && !containerSupported;
+
+        resolve({ videoCodec, audioCodec, containerFormat, needsTranscoding, onlyContainerTranscode });
+      } catch {
+        resolve({ videoCodec: 'unknown', audioCodec: 'unknown', containerFormat: 'unknown', needsTranscoding: false, onlyContainerTranscode: false });
+      }
+    });
+
+    ffprobe.on('error', () => {
+      resolve({ videoCodec: 'unknown', audioCodec: 'unknown', containerFormat: 'unknown', needsTranscoding: false, onlyContainerTranscode: false });
+    });
+  });
+}
+
 // 使用ffprobe获取视频信息
 export function getVideoInfo(filePath: string): Promise<VideoInfo | null> {
   return new Promise((resolve) => {
