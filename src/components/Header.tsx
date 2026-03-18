@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { getCategories, getFavoriteVideos, getHistoryVideos, getAuthors, Category, Video, Author } from '../api';
+import { getCategories, getFavoriteVideos, getHistoryVideos, getAuthors, getAllFavoriteFrames, Category, Video, Author, FavoriteFrame } from '../api';
 import VideoCard from './VideoCard';
 
 export default function Header() {
@@ -13,14 +13,17 @@ export default function Header() {
   const [showAuthorDropdown, setShowAuthorDropdown] = useState(false);
   const [showFavoritesDropdown, setShowFavoritesDropdown] = useState(false);
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
+  const [showFramesDropdown, setShowFramesDropdown] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [authors, setAuthors] = useState<Author[]>([]);
   const [favoritesVideos, setFavoritesVideos] = useState<Video[]>([]);
   const [historyVideos, setHistoryVideos] = useState<Video[]>([]);
+  const [favoriteFrames, setFavoriteFrames] = useState<FavoriteFrame[]>([]);
   const categoryDropdownRef = useRef<HTMLDivElement>(null);
   const authorDropdownRef = useRef<HTMLDivElement>(null);
   const favoritesDropdownRef = useRef<HTMLDivElement>(null);
   const historyDropdownRef = useRef<HTMLDivElement>(null);
+  const framesDropdownRef = useRef<HTMLDivElement>(null);
   const { searchQuery, setSearchQuery } = useAppContext();
 
   useEffect(() => {
@@ -38,11 +41,16 @@ export default function Header() {
     getHistoryVideos({ limit: 10 }).then(data => setHistoryVideos(data.videos)).catch(console.error);
   };
 
+  const loadFavoriteFrames = () => {
+    getAllFavoriteFrames().then(setFavoriteFrames).catch(console.error);
+  };
+
   useEffect(() => {
     getCategories().then(setCategories).catch(console.error);
     getAuthors().then(setAuthors).catch(console.error);
     loadFavorites();
     loadHistory();
+    loadFavoriteFrames();
   }, []);
 
   useEffect(() => {
@@ -56,6 +64,20 @@ export default function Header() {
       loadHistory();
     }
   }, [showHistoryDropdown]);
+
+  useEffect(() => {
+    if (showFramesDropdown) {
+      loadFavoriteFrames();
+    }
+  }, [showFramesDropdown]);
+
+  useEffect(() => {
+    const handleFramesUpdated = () => {
+      loadFavoriteFrames();
+    };
+    window.addEventListener('favoriteFramesUpdated', handleFramesUpdated);
+    return () => window.removeEventListener('favoriteFramesUpdated', handleFramesUpdated);
+  }, []);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -79,6 +101,12 @@ export default function Header() {
     } else {
       document.documentElement.classList.remove('dark');
     }
+  };
+
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   const handleCategoryClick = (category: string) => {
@@ -130,6 +158,67 @@ export default function Header() {
         </div>
       </div>
       <div className="flex items-center gap-4 shrink-0">
+        <div className="relative" ref={framesDropdownRef}>
+          <div>
+            <button 
+              className="rounded-lg transition-colors flex items-center justify-center cursor-pointer text-slate-600 dark:text-slate-400"
+              title="喜欢的帧"
+              onClick={() => setShowFramesDropdown(!showFramesDropdown)}
+              onMouseEnter={() => setShowFramesDropdown(true)}
+              onMouseLeave={() => setShowFramesDropdown(false)}
+            >
+              <span className="material-symbols-outlined hover:text-pink-500">flag</span>
+            </button>
+          </div>
+          {showFramesDropdown && (
+            <div 
+              onMouseEnter={() => setShowFramesDropdown(true)}
+              onMouseLeave={() => setShowFramesDropdown(false)}
+            >
+              <div className="absolute top-full left-0 right-0 h-2"></div>
+              <div 
+                className="absolute top-full mt-2 w-80 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 py-2 z-50 max-h-[calc(100vh-200px)] overflow-y-auto"
+                style={{ right: 'auto', left: '50%', transform: 'translateX(-60%)' }}
+              >
+                {favoriteFrames.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-slate-500">
+                    <span className="material-symbols-outlined text-4xl mb-2">flag</span>
+                    <div className="text-sm">暂无喜欢的帧</div>
+                  </div>
+                ) : (
+                  favoriteFrames.map((frame) => (
+                    <div
+                      key={frame.id}
+                      onClick={() => navigate(`/video/${frame.videoId}?t=${Math.floor(frame.timeSeconds)}`)}
+                      className="px-4 py-2 cursor-pointer transition-colors hover:bg-slate-100 dark:hover:bg-slate-700"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-16 h-10 bg-slate-200 dark:bg-slate-700 rounded flex-shrink-0 overflow-hidden">
+                          {frame.thumbnailPath && (
+                            <img 
+                              src={`http://localhost:3001/api/thumbnails/${frame.thumbnailPath}`} 
+                              alt="" 
+                              className="w-full h-full object-cover"
+                            />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
+                            {frame.videoTitle}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {formatTime(frame.timeSeconds)}
+                            {frame.note && ` · ${frame.note}`}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
         <div className="relative" ref={categoryDropdownRef}>
           <div>
             <button 

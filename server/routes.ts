@@ -1,47 +1,32 @@
 import { Router, Request, Response } from 'express';
 import db, { initDatabase, dbPath, reloadDatabase, getDb } from './database';
-import { addVideoToDatabase, refreshAllVideos, scanAndAddVideos, scanProgress, generateSpriteForVideo, loadScanProgressFromDb, saveScanProgressToDb, clearScanProgressFromDb, startProgressAutoSave, stopProgressAutoSave, getScanProgress, stopScan, shouldStopScan, waitForAllFfmpegProcesses, findVideoFolders, clearStopScanFlags, getVideoCodecInfo } from './scanner';
-import { spawn, ChildProcess, execSync } from 'child_process';
+import { addVideoToDatabase, refreshAllVideos, scanAndAddVideos, scanProgress, generateSpriteForVideo, loadScanProgressFromDb, saveScanProgressToDb, clearScanProgressFromDb, startProgressAutoSave, stopProgressAutoSave, getScanProgress, stopScan, shouldStopScan, waitForAllFfmpegProcesses, findVideoFolders, clearStopScanFlags } from './scanner';
+import { exec } from 'child_process';
+import {
+  generateSubtitle,
+  getSubtitleStatus,
+  readSRTFile,
+  parseSRT,
+  deleteSubtitle,
+  cancelSubtitleGeneration,
+  isGenerating,
+  getCurrentGeneratingVideoId,
+  findAvailableEngines,
+  findAvailableModels,
+  getSubtitlesDir,
+  getBestEngine,
+  startRealtimeGeneration,
+  RealtimeSubtitle
+} from './whisper';
 
 const PREVIEW_PARALLEL_LIMIT = 4;
 import fs from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
 
 const router = Router();
 
-// 检测可用的硬件加速编码器
-let hardwareEncoder: string | null = null;
-
-function detectHardwareEncoder(): string | null {
-  try {
-    // 检测 NVIDIA NVENC
-    const nvencResult = execSync('ffmpeg -encoders 2>nul | findstr h264_nvenc', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-    if (nvencResult.includes('h264_nvenc')) {
-      console.log('检测到 NVIDIA NVENC 硬件加速');
-      return 'h264_nvenc';
-    }
-  } catch (e) {
-    // NVENC 不可用
-  }
-  
-  try {
-    // 检测 Intel QSV
-    const qsvResult = execSync('ffmpeg -encoders 2>nul | findstr h264_qsv', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-    if (qsvResult.includes('h264_qsv')) {
-      console.log('检测到 Intel QSV 硬件加速');
-      return 'h264_qsv';
-    }
-  } catch (e) {
-    // QSV 不可用
-  }
-  
-  console.log('未检测到硬件加速，使用 CPU 编码');
-  return null;
-}
-
-// 初始化时检测硬件加速
-hardwareEncoder = detectHardwareEncoder();
+// 获取 data 目录路径（dbPath 已经是 data/videos.db，所以 dirname 就是 data）
+const dataDir = path.dirname(dbPath);
 
 // 删除文件（带重试机制）
 function deleteFileWithRetry(filePath: string, maxRetries: number = 5): boolean {
@@ -255,6 +240,14 @@ router.get('/videos/:id', (req: Request, res: Response) => {
     // 获取喜欢帧列表
     const favoriteFrames = getDb().prepare('SELECT * FROM favorite_frames WHERE video_id = ? ORDER BY time_seconds ASC').all(id) as any[];
 
+    // 获取字幕信息
+    const subtitles = getDb().prepare(`
+      SELECT id, language, model, status, srt_path, created_at 
+      FROM subtitles 
+      WHERE video_id = ? AND status = 'completed'
+      ORDER BY created_at DESC
+    `).all(id) as any[];
+
     // 获取同类别的其他视频
     const relatedVideos = video.category_id ? 
       getDb().prepare(`
@@ -292,6 +285,13 @@ router.get('/videos/:id', (req: Request, res: Response) => {
           id: f.id,
           timeSeconds: f.time_seconds,
           note: f.note
+        })),
+        subtitles: subtitles.map(s => ({
+          id: s.id,
+          language: s.language,
+          model: s.model,
+          srtPath: s.srt_path,
+          createdAt: s.created_at
         })),
         relatedVideos: relatedVideos.map(v => ({
           id: v.id,
@@ -421,6 +421,41 @@ router.delete('/videos/:id/favorite-frames/:frameId', (req: Request, res: Respon
   }
 });
 
+// 获取所有喜欢的帧
+router.get('/favorite-frames', (req: Request, res: Response) => {
+  try {
+    const frames = getDb().prepare(`
+      SELECT 
+        f.id, 
+        f.video_id, 
+        f.time_seconds, 
+        f.note, 
+        f.created_at,
+        v.title as video_title,
+        v.thumbnail_path
+      FROM favorite_frames f
+      LEFT JOIN videos v ON f.video_id = v.id
+      ORDER BY f.created_at DESC
+    `).all() as any[];
+    
+    res.json({
+      success: true,
+      data: frames.map(f => ({
+        id: f.id,
+        videoId: f.video_id,
+        timeSeconds: f.time_seconds,
+        note: f.note,
+        createdAt: f.created_at,
+        videoTitle: f.video_title,
+        thumbnailPath: f.thumbnail_path
+      }))
+    });
+  } catch (error) {
+    console.error('获取喜欢的帧失败:', error);
+    res.status(500).json({ success: false, error: '获取喜欢的帧失败' });
+  }
+});
+
 // 重置视频数据
 router.post('/videos/:id/reset', (req: Request, res: Response) => {
   try {
@@ -518,8 +553,8 @@ router.delete('/videos/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     
     // 删除封面和精灵图
-    const coversDir = path.join(process.cwd(), 'data', 'covers');
-    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    const coversDir = path.join(dataDir, 'covers');
+    const previewsDir = path.join(dataDir, 'previews');
     
     const coverPath = path.join(coversDir, `${id}.jpg`);
     if (fs.existsSync(coverPath)) {
@@ -547,7 +582,7 @@ router.delete('/videos/:id', (req: Request, res: Response) => {
 router.get('/videos/:id/sprite-exists', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    const previewsDir = path.join(dataDir, 'previews');
     const spritePath = path.join(previewsDir, `${id}_sprite.jpg`);
     const exists = fs.existsSync(spritePath);
     res.json({ exists });
@@ -919,8 +954,8 @@ router.post('/paths/:id/clear', async (req: Request, res: Response) => {
     }
     
     // 删除封面和精灵图
-    const coversDir = path.join(process.cwd(), 'data', 'covers');
-    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    const coversDir = path.join(dataDir, 'covers');
+    const previewsDir = path.join(dataDir, 'previews');
     
     for (const video of videos) {
       const coverPath = path.join(coversDir, `${video.id}.jpg`);
@@ -1043,8 +1078,8 @@ router.delete('/paths/:id', async (req: Request, res: Response) => {
     }
     
     // 删除封面和精灵图
-    const coversDir = path.join(process.cwd(), 'data', 'covers');
-    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    const coversDir = path.join(dataDir, 'covers');
+    const previewsDir = path.join(dataDir, 'previews');
     
     for (const video of videos) {
       const coverPath = path.join(coversDir, `${video.id}.jpg`);
@@ -1210,7 +1245,7 @@ router.post('/generate-previews', async (req: Request, res: Response) => {
       `).all(`${normalizedPath}%`, `${pathInfo.path}%`) as any[];
       
       // 检查哪些视频缺少预览图
-      const previewsDir = path.join(process.cwd(), 'data', 'previews');
+      const previewsDir = path.join(dataDir, 'previews');
       const videosWithoutPreview: number[] = [];
       
       for (const video of pathVideos) {
@@ -1303,8 +1338,8 @@ router.post('/rescan', async (req: Request, res: Response) => {
       console.log(`重新扫描路径: ${scanPath}（标准化: ${normalizedPath}），找到 ${videos.length} 个视频需要删除`);
 
       // 删除这些视频的封面和精灵图
-      const coversDir = path.join(process.cwd(), 'data', 'covers');
-      const previewsDir = path.join(process.cwd(), 'data', 'previews');
+      const coversDir = path.join(dataDir, 'covers');
+      const previewsDir = path.join(dataDir, 'previews');
 
       for (const video of videos) {
         console.log(`处理视频: ID=${video.id}, 路径=${video.file_path}`);
@@ -1374,8 +1409,8 @@ router.post('/rescan', async (req: Request, res: Response) => {
   }
 });
 
-// 视频流播放接口 - 支持Range请求和实时转码
-router.get('/stream/:id', async (req: Request, res: Response) => {
+// 视频流播放接口 - 直接流式传输，支持 Range 请求
+router.get('/stream/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     
@@ -1393,372 +1428,74 @@ router.get('/stream/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: '视频文件不存在' });
     }
 
-    // 检测视频编码
-    const codecInfo = await getVideoCodecInfo(filePath);
-    
-    if (codecInfo.needsTranscoding) {
-      if (codecInfo.onlyContainerTranscode) {
-        // 编码支持但容器不支持：先转成临时文件，再支持 Range 请求
-        console.log(`视频 ${id} 快速转码（仅容器）: ${codecInfo.containerFormat} -> mp4 (编码: ${codecInfo.videoCodec})`);
-        
-        // 创建临时目录
-        const tempDir = path.join(process.cwd(), 'data', 'temp');
-        if (!fs.existsSync(tempDir)) {
-          fs.mkdirSync(tempDir, { recursive: true });
-        }
-        
-        const tempFilePath = path.join(tempDir, `temp_${id}_${Date.now()}.mp4`);
-        
-        const ffmpegArgs = [
-          '-i', filePath,
-          '-c', 'copy',
-          '-movflags', 'faststart',
-          '-y',
-          tempFilePath
-        ];
-        
-        console.log(`执行 ffmpeg: ffmpeg ${ffmpegArgs.join(' ')}`);
-        
-        try {
-          // 先完成转码到临时文件
-          await new Promise<void>((resolve, reject) => {
-            const ffmpeg = spawn('ffmpeg', ffmpegArgs);
-            let ffmpegErrorLog = '';
-            
-            ffmpeg.stderr.on('data', (data) => {
-              ffmpegErrorLog += data.toString();
-            });
-            
-            ffmpeg.on('close', (code) => {
-              if (code !== 0 && code !== null) {
-                console.error(`ffmpeg 转码结束，退出码: ${code}`);
-                console.error(`ffmpeg 错误日志:\n${ffmpegErrorLog}`);
-                reject(new Error('转码失败'));
-              } else {
-                console.log(`视频 ${id} 转码完成，临时文件: ${tempFilePath}`);
-                resolve();
-              }
-            });
-            
-            ffmpeg.on('error', (err) => {
-              console.error('ffmpeg 转码错误:', err);
-              reject(err);
-            });
-          });
-          
-          // 转码成功，用临时文件支持 Range 请求
-          const stat = fs.statSync(tempFilePath);
-          const fileSize = stat.size;
-          const range = req.headers.range;
-          
-          if (range) {
-            // 解析Range头
-            const parts = range.replace(/bytes=/, '').split('-');
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-            const chunkSize = end - start + 1;
-            
-            const fileStream = fs.createReadStream(tempFilePath, { start, end });
-            
-            res.writeHead(206, {
-              'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-              'Accept-Ranges': 'bytes',
-              'Content-Length': chunkSize,
-              'Content-Type': 'video/mp4'
-            });
-            
-            fileStream.pipe(res);
-            
-            // 传输完成后删除临时文件
-            fileStream.on('close', () => {
-              setTimeout(() => {
-                try {
-                  if (fs.existsSync(tempFilePath)) {
-                    fs.unlinkSync(tempFilePath);
-                    console.log(`临时文件已删除: ${tempFilePath}`);
-                  }
-                } catch (e) {
-                  console.error('删除临时文件失败:', e);
-                }
-              }, 5000);
-            });
-          } else {
-            // 不带Range头，返回整个文件
-            res.writeHead(200, {
-              'Content-Length': fileSize,
-              'Content-Type': 'video/mp4'
-            });
-            
-            const fileStream = fs.createReadStream(tempFilePath);
-            fileStream.pipe(res);
-            
-            // 传输完成后删除临时文件
-            fileStream.on('close', () => {
-              setTimeout(() => {
-                try {
-                  if (fs.existsSync(tempFilePath)) {
-                    fs.unlinkSync(tempFilePath);
-                    console.log(`临时文件已删除: ${tempFilePath}`);
-                  }
-                } catch (e) {
-                  console.error('删除临时文件失败:', e);
-                }
-              }, 5000);
-            });
-          }
-          
-          // 客户端断开连接时删除临时文件
-          req.on('close', () => {
-            setTimeout(() => {
-              try {
-                if (fs.existsSync(tempFilePath)) {
-                  fs.unlinkSync(tempFilePath);
-                  console.log(`客户端断开连接，删除临时文件: ${tempFilePath}`);
-                }
-              } catch (e) {
-                console.error('删除临时文件失败:', e);
-              }
-            }, 1000);
-          });
-          
-        } catch (err) {
-          // 转码失败，删除临时文件（如果存在）
-          try {
-            if (fs.existsSync(tempFilePath)) {
-              fs.unlinkSync(tempFilePath);
-            }
-          } catch (e) {
-            // 忽略
-          }
-          
-          // 回退到直接流式传输
-          console.log('转码失败，尝试直接流式传输...');
-          try {
-            const stat = fs.statSync(filePath);
-            const fileSize = stat.size;
-            res.writeHead(200, {
-              'Content-Length': fileSize,
-              'Content-Type': 'video/mp4'
-            });
-            fs.createReadStream(filePath).pipe(res);
-          } catch (fallbackErr) {
-            console.error('回退也失败:', fallbackErr);
-            res.status(500).json({ success: false, error: '视频播放失败' });
-          }
-        }
-        
-      } else {
-        // 编码不支持：完整转码，使用缓存机制支持进度拖动
-        console.log(`视频 ${id} 完整转码 (容器: ${codecInfo.containerFormat}, 编码: ${codecInfo.videoCodec} -> h264)`);
-        
-        // 创建转码缓存目录
-        const cacheDir = path.join(process.cwd(), 'data', 'transcode_cache');
-        if (!fs.existsSync(cacheDir)) {
-          fs.mkdirSync(cacheDir, { recursive: true });
-        }
-        
-        // 缓存文件名：基于视频ID和原文件修改时间
-        const originalStat = fs.statSync(filePath);
-        const cacheFileName = `${id}_${originalStat.mtimeMs.toFixed(0)}.mp4`;
-        const cacheFilePath = path.join(cacheDir, cacheFileName);
-        
-        // 检查缓存是否存在
-        let needTranscode = !fs.existsSync(cacheFilePath);
-        
-        if (needTranscode) {
-          // 清理该视频的旧缓存文件
-          try {
-            const oldCacheFiles = fs.readdirSync(cacheDir).filter(f => f.startsWith(`${id}_`));
-            for (const oldFile of oldCacheFiles) {
-              try {
-                fs.unlinkSync(path.join(cacheDir, oldFile));
-                console.log(`清理旧缓存: ${oldFile}`);
-              } catch (e) {
-                // 忽略
-              }
-            }
-          } catch (e) {
-            // 忽略
-          }
-          
-          // 开始转码
-          console.log(`开始转码到缓存: ${cacheFilePath}`);
-          
-          // 根据硬件加速情况选择编码参数
-          let ffmpegArgs: string[];
-          
-          if (hardwareEncoder === 'h264_nvenc') {
-            // NVIDIA NVENC 硬件加速
-            ffmpegArgs = [
-              '-i', filePath,
-              '-c:v', 'h264_nvenc',
-              '-preset', 'p1',
-              '-tune', 'll',
-              '-cq', '28',
-              '-c:a', 'aac',
-              '-b:a', '128k',
-              '-movflags', '+faststart',
-              '-y',
-              cacheFilePath
-            ];
-          } else if (hardwareEncoder === 'h264_qsv') {
-            // Intel QSV 硬件加速
-            ffmpegArgs = [
-              '-i', filePath,
-              '-c:v', 'h264_qsv',
-              '-preset', 'veryfast',
-              '-global_quality', '28',
-              '-c:a', 'aac',
-              '-b:a', '128k',
-              '-movflags', '+faststart',
-              '-y',
-              cacheFilePath
-            ];
-          } else {
-            // CPU 编码（优化参数）
-            ffmpegArgs = [
-              '-i', filePath,
-              '-c:v', 'libx264',
-              '-preset', 'ultrafast',
-              '-tune', 'fastdecode',
-              '-crf', '28',
-              '-threads', '0',
-              '-c:a', 'aac',
-              '-b:a', '128k',
-              '-movflags', '+faststart',
-              '-y',
-              cacheFilePath
-            ];
-          }
-          
-          console.log(`执行 ffmpeg: ffmpeg ${ffmpegArgs.join(' ')}`);
-          
-          try {
-            await new Promise<void>((resolve, reject) => {
-              const ffmpeg = spawn('ffmpeg', ffmpegArgs);
-              let ffmpegErrorLog = '';
-              
-              ffmpeg.stderr.on('data', (data) => {
-                ffmpegErrorLog += data.toString();
-                if (data.toString().includes('frame=')) {
-                  process.stdout.write(data);
-                }
-              });
-              
-              ffmpeg.on('close', (code) => {
-                if (code !== 0 && code !== null) {
-                  console.error(`ffmpeg 转码结束，退出码: ${code}`);
-                  console.error(`ffmpeg 错误日志:\n${ffmpegErrorLog}`);
-                  reject(new Error('转码失败'));
-                } else {
-                  console.log(`视频 ${id} 转码完成，缓存: ${cacheFilePath}`);
-                  resolve();
-                }
-              });
-              
-              ffmpeg.on('error', (err) => {
-                console.error('ffmpeg 转码错误:', err);
-                reject(err);
-              });
-            });
-          } catch (err) {
-            // 转码失败，删除可能的部分文件
-            try {
-              if (fs.existsSync(cacheFilePath)) {
-                fs.unlinkSync(cacheFilePath);
-              }
-            } catch (e) {
-              // 忽略
-            }
-            
-            // 回退到直接流式传输
-            console.log('转码失败，尝试直接流式传输...');
-            try {
-              const stat = fs.statSync(filePath);
-              const fileSize = stat.size;
-              res.writeHead(200, {
-                'Content-Length': fileSize,
-                'Content-Type': 'video/mp4'
-              });
-              fs.createReadStream(filePath).pipe(res);
-            } catch (fallbackErr) {
-              console.error('回退也失败:', fallbackErr);
-              res.status(500).json({ success: false, error: '视频播放失败' });
-            }
-            return;
-          }
-        } else {
-          console.log(`使用缓存文件: ${cacheFilePath}`);
-        }
-        
-        // 使用缓存文件支持 Range 请求
-        try {
-          const stat = fs.statSync(cacheFilePath);
-          const fileSize = stat.size;
-          const range = req.headers.range;
-          
-          if (range) {
-            const parts = range.replace(/bytes=/, '').split('-');
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-            const chunkSize = end - start + 1;
-            
-            const fileStream = fs.createReadStream(cacheFilePath, { start, end });
-            
-            res.writeHead(206, {
-              'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-              'Accept-Ranges': 'bytes',
-              'Content-Length': chunkSize,
-              'Content-Type': 'video/mp4'
-            });
-            
-            fileStream.pipe(res);
-          } else {
-            res.writeHead(200, {
-              'Content-Length': fileSize,
-              'Content-Type': 'video/mp4'
-            });
-            
-            fs.createReadStream(cacheFilePath).pipe(res);
-          }
-        } catch (err) {
-          console.error('读取缓存文件失败:', err);
-          res.status(500).json({ success: false, error: '视频播放失败' });
-        }
-      }
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
 
+    // 根据文件扩展名确定 Content-Type
+    const ext = path.extname(filePath).toLowerCase();
+    const contentTypes: Record<string, string> = {
+      '.mp4': 'video/mp4',
+      '.mkv': 'video/x-matroska',
+      '.webm': 'video/webm',
+      '.avi': 'video/x-msvideo',
+      '.mov': 'video/quicktime',
+      '.wmv': 'video/x-ms-wmv',
+      '.flv': 'video/x-flv',
+      '.ts': 'video/mp2t',
+      '.m2ts': 'video/mp2t'
+    };
+    const contentType = contentTypes[ext] || 'video/mp4';
+
+    if (range) {
+      // 解析 Range 头
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+
+      const fileStream = fs.createReadStream(filePath, { start, end });
+      
+      // 处理客户端断开连接
+      req.on('close', () => {
+        fileStream.destroy();
+      });
+      
+      fileStream.on('error', (err) => {
+        // 客户端断开连接是正常行为，不记录错误
+        if (!res.writableEnded) {
+          console.error('视频流错误:', err.message);
+        }
+      });
+      
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type': contentType
+      });
+
+      fileStream.pipe(res);
     } else {
-      // 不需要转码：直接流式传输
-      const stat = fs.statSync(filePath);
-      const fileSize = stat.size;
-      const range = req.headers.range;
+      // 不带 Range 头，返回整个文件
+      const fileStream = fs.createReadStream(filePath);
+      
+      req.on('close', () => {
+        fileStream.destroy();
+      });
+      
+      fileStream.on('error', (err) => {
+        if (!res.writableEnded) {
+          console.error('视频流错误:', err.message);
+        }
+      });
+      
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Content-Type': contentType
+      });
 
-      if (range) {
-        // 解析Range头
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunkSize = end - start + 1;
-
-        const fileStream = fs.createReadStream(filePath, { start, end });
-        
-        res.writeHead(206, {
-          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-          'Accept-Ranges': 'bytes',
-          'Content-Length': chunkSize,
-          'Content-Type': 'video/mp4'
-        });
-
-        fileStream.pipe(res);
-      } else {
-        // 不带Range头，返回整个文件
-        res.writeHead(200, {
-          'Content-Length': fileSize,
-          'Content-Type': 'video/mp4'
-        });
-
-        fs.createReadStream(filePath).pipe(res);
-      }
+      fileStream.pipe(res);
     }
   } catch (error) {
     console.error('视频流播放失败:', error);
@@ -1793,7 +1530,7 @@ router.get('/stats', (req: Request, res: Response) => {
 router.post('/clear-cache', async (req: Request, res: Response) => {
   try {
     // 删除所有封面图片
-    const coversDir = path.join(process.cwd(), 'data', 'covers');
+    const coversDir = path.join(dataDir, 'covers');
     if (fs.existsSync(coversDir)) {
       const files = fs.readdirSync(coversDir);
       for (const file of files) {
@@ -1804,7 +1541,7 @@ router.post('/clear-cache', async (req: Request, res: Response) => {
     }
 
     // 删除所有预览精灵图
-    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    const previewsDir = path.join(dataDir, 'previews');
     if (fs.existsSync(previewsDir)) {
       const files = fs.readdirSync(previewsDir);
       for (const file of files) {
@@ -1860,7 +1597,7 @@ router.post('/rescan-all', async (req: Request, res: Response) => {
     
     try {
       // 删除所有封面图片
-      const coversDir = path.join(process.cwd(), 'data', 'covers');
+      const coversDir = path.join(dataDir, 'covers');
       if (fs.existsSync(coversDir)) {
         const files = fs.readdirSync(coversDir);
         for (const file of files) {
@@ -1871,7 +1608,7 @@ router.post('/rescan-all', async (req: Request, res: Response) => {
       }
 
       // 删除所有预览精灵图
-      const previewsDir = path.join(process.cwd(), 'data', 'previews');
+      const previewsDir = path.join(dataDir, 'previews');
       if (fs.existsSync(previewsDir)) {
         const files = fs.readdirSync(previewsDir);
         for (const file of files) {
@@ -2169,7 +1906,7 @@ router.put('/authors/:id/rename', async (req: Request, res: Response) => {
 router.post('/delete-all', async (req: Request, res: Response) => {
   try {
     // 删除所有封面图片
-    const coversDir = path.join(process.cwd(), 'data', 'covers');
+    const coversDir = path.join(dataDir, 'covers');
     if (fs.existsSync(coversDir)) {
       const files = fs.readdirSync(coversDir);
       for (const file of files) {
@@ -2180,7 +1917,7 @@ router.post('/delete-all', async (req: Request, res: Response) => {
     }
 
     // 删除所有预览精灵图
-    const previewsDir = path.join(process.cwd(), 'data', 'previews');
+    const previewsDir = path.join(dataDir, 'previews');
     if (fs.existsSync(previewsDir)) {
       const files = fs.readdirSync(previewsDir);
       for (const file of files) {
@@ -2433,6 +2170,354 @@ router.post('/videos/:id/play-history', (req: Request, res: Response) => {
   } catch (error) {
     console.error('更新观看历史失败:', error);
     res.status(500).json({ success: false, error: '更新观看历史失败' });
+  }
+});
+
+// ============ 字幕相关路由 ============
+
+// 实时字幕连接管理
+const realtimeConnections = new Map<number, Set<Response>>();
+// 正在处理的视频ID集合（用于防止竞争条件）
+const processingVideos = new Set<number>();
+
+// 获取字幕状态
+router.get('/videos/:id/subtitle', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const status = getSubtitleStatus(Number(id));
+    res.json({ success: true, data: status });
+  } catch (error) {
+    console.error('获取字幕状态失败:', error);
+    res.status(500).json({ success: false, error: '获取字幕状态失败' });
+  }
+});
+
+// 获取字幕内容
+router.get('/videos/:id/subtitle/content', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const srtContent = readSRTFile(Number(id));
+    
+    if (!srtContent) {
+      return res.status(404).json({ success: false, error: '字幕不存在' });
+    }
+    
+    const subtitles = parseSRT(srtContent);
+    res.json({ success: true, data: { subtitles } });
+  } catch (error) {
+    console.error('获取字幕内容失败:', error);
+    res.status(500).json({ success: false, error: '获取字幕内容失败' });
+  }
+});
+
+// 生成字幕
+router.post('/videos/:id/subtitle/generate', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { model, language } = req.body;
+
+  // 获取视频路径
+  const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(id) as any;
+  if (!video) {
+    return res.status(404).json({ success: false, error: '视频不存在' });
+  }
+
+  // 检查是否正在生成
+  if (isGenerating()) {
+    const currentId = getCurrentGeneratingVideoId();
+    if (currentId === Number(id)) {
+      return res.status(400).json({ success: false, error: '该视频正在生成字幕中' });
+    }
+    return res.status(400).json({ success: false, error: '有其他视频正在生成字幕，请稍后再试' });
+  }
+
+  // 异步生成字幕
+  generateSubtitle(video.file_path, Number(id), { model, language })
+    .then(() => console.log(`视频 ${id} 字幕生成完成`))
+    .catch(err => console.error(`视频 ${id} 字幕生成失败:`, err));
+
+  res.json({ success: true, message: '字幕生成任务已开始' });
+});
+
+// 取消字幕生成
+router.post('/videos/:id/subtitle/cancel', (req: Request, res: Response) => {
+  const { id } = req.params;
+  
+  if (isGenerating() && getCurrentGeneratingVideoId() === Number(id)) {
+    cancelSubtitleGeneration(Number(id));
+    res.json({ success: true, message: '已取消字幕生成' });
+  } else {
+    res.status(400).json({ success: false, error: '没有正在进行的字幕生成任务' });
+  }
+});
+
+// 删除字幕
+router.delete('/videos/:id/subtitle', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    deleteSubtitle(Number(id));
+    res.json({ success: true, message: '字幕已删除' });
+  } catch (error) {
+    console.error('删除字幕失败:', error);
+    res.status(500).json({ success: false, error: '删除字幕失败' });
+  }
+});
+
+// 获取 Whisper 配置（引擎和模型列表）
+router.get('/whisper/config', (req: Request, res: Response) => {
+  try {
+    const engines = findAvailableEngines();
+    const models = findAvailableModels();
+    const bestEngine = getBestEngine();
+    
+    res.json({
+      success: true,
+      data: {
+        engines,
+        models,
+        bestEngine
+      }
+    });
+  } catch (error) {
+    console.error('获取 Whisper 配置失败:', error);
+    res.status(500).json({ success: false, error: '获取 Whisper 配置失败' });
+  }
+});
+
+// 实时生成字幕（SSE 流式返回）
+router.get('/videos/:id/subtitle/realtime', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const videoId = Number(id);
+  const startTime = req.query.startTime ? parseFloat(req.query.startTime as string) : 0;
+  const language = (req.query.language as string) || 'auto';
+  const model = req.query.model as string | undefined;
+
+  console.log(`[实时字幕] 收到请求，视频ID: ${videoId}, 起始时间: ${startTime}秒, 语言: ${language}, 模型: ${model || '默认'}`);
+
+  // 获取视频路径
+  const video = getDb().prepare('SELECT file_path FROM videos WHERE id = ?').get(videoId) as any;
+  if (!video) {
+    console.log(`[实时字幕] 视频不存在`);
+    // 设置 SSE 头并发送错误
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.flushHeaders();
+    res.write(`data: ${JSON.stringify({ type: 'error', error: '视频不存在' })}\n\n`);
+    res.end();
+    return;
+  }
+
+  console.log(`[实时字幕] 视频路径: ${video.file_path}`);
+
+  // 设置 SSE 头（在检查是否正在生成之前）
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  // 检查是否正在生成，先强制取消同一视频的旧任务
+  if (isGenerating()) {
+    const currentId = getCurrentGeneratingVideoId();
+    console.log(`[实时字幕] 当前正在生成的视频ID: ${currentId}, 请求的视频ID: ${videoId}`);
+    if (currentId === videoId) {
+      // 如果是同一个视频，强制取消旧的生成任务
+      console.log(`[实时字幕] 同一视频重复请求，强制取消旧的生成任务`);
+      // 先清理处理标记
+      processingVideos.delete(videoId);
+      cancelSubtitleGeneration(videoId);
+      // 等待一小段时间确保进程完全终止
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: '有其他视频正在生成字幕，请稍后再试' })}\n\n`);
+      res.end();
+      return;
+    }
+  }
+
+  // 检查是否已经在处理中（防止快速连续请求）
+  if (processingVideos.has(videoId)) {
+    console.log(`[实时字幕] 视频正在处理中，跳过重复请求`);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: '正在处理中，请稍候' })}\n\n`);
+    res.end();
+    return;
+  }
+  processingVideos.add(videoId);
+
+  // 添加连接到管理器
+  if (!realtimeConnections.has(videoId)) {
+    realtimeConnections.set(videoId, new Set());
+  }
+  realtimeConnections.get(videoId)!.add(res);
+
+  // 监听客户端断开连接
+  req.on('close', () => {
+    console.log(`[实时字幕] 客户端断开连接，视频ID: ${videoId}`);
+    // 取消生成
+    cancelSubtitleGeneration(videoId);
+    // 清理连接
+    realtimeConnections.get(videoId)?.delete(res);
+    if (realtimeConnections.get(videoId)?.size === 0) {
+      realtimeConnections.delete(videoId);
+    }
+  });
+
+  // 发送初始状态
+  res.write(`data: ${JSON.stringify({ type: 'status', message: '正在提取音频...' })}\n\n`);
+
+  // 记录已保存的字幕数量
+  let savedCount = 0;
+
+  try {
+    const result = await startRealtimeGeneration(
+      video.file_path,
+      videoId,
+      { startTime, language, model },
+      (subtitle: RealtimeSubtitle) => {
+        // 发送字幕到客户端
+        console.log(`[实时字幕] 发送字幕: ${subtitle.text.substring(0, 30)}...`);
+        
+        // 立即保存字幕片段到数据库
+        try {
+          getDb().prepare(`
+            INSERT INTO subtitle_segments (video_id, start_time, end_time, text, language, model)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).run(videoId, subtitle.start, subtitle.end, subtitle.text, 'auto', 'whisper');
+          savedCount++;
+        } catch (e) {
+          console.error('[实时字幕] 保存字幕片段失败:', e);
+        }
+        
+        if (realtimeConnections.has(videoId)) {
+          const message = `data: ${JSON.stringify({ type: 'subtitle', ...subtitle })}\n\n`;
+          for (const conn of realtimeConnections.get(videoId)!) {
+            try {
+              conn.write(message);
+            } catch (e) {
+              // 连接已关闭
+            }
+          }
+        }
+      }
+    );
+
+    console.log(`[实时字幕] 生成结果: ${JSON.stringify(result)}`);
+
+    if (result.success) {
+      res.write(`data: ${JSON.stringify({ type: 'complete', savedSegments: savedCount })}\n\n`);
+    } else if (result.error !== '已取消') {
+      // 如果是取消错误，不发送（这是正常的跳转行为）
+      res.write(`data: ${JSON.stringify({ type: 'error', error: result.error })}\n\n`);
+    }
+  } catch (error: any) {
+    // 如果是取消错误，不发送
+    if (error.message !== '已取消') {
+      console.error(`[实时字幕] 错误: ${error.message}`);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+    }
+  } finally {
+    // 清理处理标记
+    processingVideos.delete(videoId);
+  }
+
+  // 清理连接
+  realtimeConnections.get(videoId)?.delete(res);
+  if (realtimeConnections.get(videoId)?.size === 0) {
+    realtimeConnections.delete(videoId);
+  }
+
+  res.end();
+});
+
+// 获取字幕片段（已有字幕）
+router.get('/videos/:id/subtitle/segments', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const videoId = Number(id);
+
+    // 查询该视频的所有字幕片段，按时间排序
+    const segments = getDb().prepare(`
+      SELECT id, start_time, end_time, text, language, model
+      FROM subtitle_segments
+      WHERE video_id = ?
+      ORDER BY start_time ASC
+    `).all(videoId) as any[];
+
+    res.json({
+      success: true,
+      data: segments.map(s => ({
+        id: s.id,
+        startTime: s.start_time,
+        endTime: s.end_time,
+        text: s.text,
+        language: s.language,
+        model: s.model
+      }))
+    });
+  } catch (error) {
+    console.error('获取字幕片段失败:', error);
+    res.status(500).json({ success: false, error: '获取字幕片段失败' });
+  }
+});
+
+// 保存字幕片段
+router.post('/videos/:id/subtitle/segments', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const videoId = Number(id);
+    const { segments } = req.body;
+
+    if (!Array.isArray(segments)) {
+      return res.status(400).json({ success: false, error: 'segments 必须是数组' });
+    }
+
+    // 批量插入字幕片段
+    const stmt = getDb().prepare(`
+      INSERT INTO subtitle_segments (video_id, start_time, end_time, text, language, model)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    const insertMany = getDb().transaction((items: any[]) => {
+      for (const seg of items) {
+        stmt.run(videoId, seg.startTime, seg.endTime, seg.text, seg.language || 'auto', seg.model || 'base');
+      }
+    });
+
+    insertMany(segments);
+
+    res.json({ success: true, message: `保存了 ${segments.length} 条字幕片段` });
+  } catch (error) {
+    console.error('保存字幕片段失败:', error);
+    res.status(500).json({ success: false, error: '保存字幕片段失败' });
+  }
+});
+
+// 获取字幕覆盖范围
+router.get('/videos/:id/subtitle/coverage', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const videoId = Number(id);
+
+    // 获取字幕片段的时间范围
+    const result = getDb().prepare(`
+      SELECT 
+        MIN(start_time) as min_time,
+        MAX(end_time) as max_time,
+        COUNT(*) as segment_count
+      FROM subtitle_segments
+      WHERE video_id = ?
+    `).get(videoId) as any;
+
+    res.json({
+      success: true,
+      data: {
+        hasSegments: result.segment_count > 0,
+        minTime: result.min_time || 0,
+        maxTime: result.max_time || 0,
+        segmentCount: result.segment_count || 0
+      }
+    });
+  } catch (error) {
+    console.error('获取字幕覆盖范围失败:', error);
+    res.status(500).json({ success: false, error: '获取字幕覆盖范围失败' });
   }
 });
 

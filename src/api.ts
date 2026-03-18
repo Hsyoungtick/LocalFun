@@ -73,6 +73,13 @@ export interface VideoDetail {
     timeSeconds: number;
     note?: string;
   }[];
+  subtitles: {
+    id: number;
+    language: string;
+    model: string;
+    srtPath: string;
+    createdAt: string;
+  }[];
   relatedVideos: {
     id: number;
     title: string;
@@ -490,11 +497,19 @@ export async function getSameCategoryVideos(
   if (params?.order) searchParams.set('order', params.order);
   if (params?.limit) searchParams.set('limit', params.limit.toString());
 
-  const response = await fetch(`${API_BASE}/videos/${id}/same-category?${searchParams}`);
-  const data = await response.json();
-  
-  if (!data.success) throw new Error(data.error);
-  return data.data;
+  try {
+    const response = await fetch(`${API_BASE}/videos/${id}/same-category?${searchParams}`);
+    const data = await response.json();
+    
+    if (!data.success) throw new Error(data.error);
+    return data.data;
+  } catch (error: any) {
+    // 页面刷新或导航导致的请求取消是正常行为，静默处理
+    if (error.name === 'AbortError' || error.message?.includes('abort')) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 // 添加喜欢帧
@@ -530,6 +545,25 @@ export async function deleteFavoriteFrame(id: number, frameId: number): Promise<
   const data = await response.json();
   
   if (!data.success) throw new Error(data.error);
+}
+
+// 获取所有喜欢的帧
+export interface FavoriteFrame {
+  id: number;
+  videoId: number;
+  timeSeconds: number;
+  note: string | null;
+  createdAt: string;
+  videoTitle: string;
+  thumbnailPath: string | null;
+}
+
+export async function getAllFavoriteFrames(): Promise<FavoriteFrame[]> {
+  const response = await fetch(`${API_BASE}/favorite-frames`);
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
 }
 
 // 重置视频数据
@@ -632,4 +666,198 @@ export async function updatePlayHistory(
   const data = await response.json();
   
   if (!data.success) throw new Error(data.error);
+}
+
+// ========== 字幕相关 API ==========
+
+export interface SubtitleStatus {
+  exists: boolean;
+  status?: string;
+  isGenerating: boolean;
+}
+
+export interface SubtitleContent {
+  raw: string;
+  subtitles: Array<{
+    index: number;
+    start: number;
+    end: number;
+    text: string;
+  }>;
+}
+
+export interface EngineInfo {
+  name: string;
+  path: string;
+  type: 'cpu' | 'vulkan' | 'const-me';
+  available: boolean;
+}
+
+export interface ModelInfo {
+  name: string;
+  path: string;
+  size: string;
+}
+
+export interface WhisperConfig {
+  engines: EngineInfo[];
+  models: ModelInfo[];
+  bestEngine: { name: string; type: string } | null;
+  isGenerating: boolean;
+  currentGeneratingVideoId: number | null;
+}
+
+export interface RealtimeSubtitleEvent {
+  type: 'status' | 'subtitle' | 'complete' | 'error';
+  message?: string;
+  start?: number;
+  end?: number;
+  text?: string;
+  error?: string;
+  savedSegments?: number;
+}
+
+// 获取字幕状态
+export async function getSubtitleStatus(videoId: number): Promise<SubtitleStatus> {
+  const response = await fetch(`${API_BASE}/videos/${videoId}/subtitle`);
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 获取字幕内容
+export async function getSubtitleContent(videoId: number): Promise<SubtitleContent> {
+  const response = await fetch(`${API_BASE}/videos/${videoId}/subtitle/content`);
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 生成字幕（普通模式）
+export async function generateSubtitle(
+  videoId: number, 
+  options?: { model?: string; language?: string }
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${videoId}/subtitle/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options || {})
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 取消字幕生成
+export async function cancelSubtitleGeneration(videoId: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${videoId}/subtitle/cancel`, {
+    method: 'POST'
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 删除字幕
+export async function deleteSubtitle(videoId: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/videos/${videoId}/subtitle`, {
+    method: 'DELETE'
+  });
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+}
+
+// 获取 Whisper 配置
+export async function getWhisperConfig(): Promise<WhisperConfig> {
+  const response = await fetch(`${API_BASE}/whisper/config`);
+  const data = await response.json();
+  
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 实时生成字幕（SSE 流式）
+export function startRealtimeSubtitle(
+  videoId: number,
+  onSubtitle: (event: RealtimeSubtitleEvent) => void,
+  onError?: (error: Error) => void,
+  startTime?: number,
+  options?: { language?: string; model?: string }
+): () => void {
+  const params = new URLSearchParams();
+  if (startTime) params.append('startTime', startTime.toString());
+  if (options?.language) params.append('language', options.language);
+  if (options?.model) params.append('model', options.model);
+  
+  const url = `${API_BASE}/videos/${videoId}/subtitle/realtime?${params.toString()}`;
+  const eventSource = new EventSource(url);
+  let isManualClose = false;
+  
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data) as RealtimeSubtitleEvent;
+      onSubtitle(data);
+      
+      if (data.type === 'complete' || data.type === 'error') {
+        isManualClose = true;
+        eventSource.close();
+      }
+    } catch (e) {
+      console.error('解析实时字幕数据失败:', e);
+    }
+  };
+  
+  eventSource.onerror = () => {
+    // 如果是手动关闭或连接已关闭，不触发错误
+    if (isManualClose || eventSource.readyState === EventSource.CLOSED) {
+      return;
+    }
+    // 只在连接意外中断时才触发错误（例如服务器错误）
+    // 刷新页面导致的连接中断不显示错误
+    console.log('实时字幕连接已关闭');
+    eventSource.close();
+  };
+  
+  // 返回取消函数
+  return () => {
+    isManualClose = true;
+    eventSource.close();
+  };
+}
+
+// 字幕片段类型
+export interface SubtitleSegment {
+  id: number;
+  startTime: number;
+  endTime: number;
+  text: string;
+  language: string;
+  model: string;
+}
+
+// 字幕覆盖范围
+export interface SubtitleCoverage {
+  hasSegments: boolean;
+  minTime: number;
+  maxTime: number;
+  segmentCount: number;
+}
+
+// 获取字幕片段
+export async function getSubtitleSegments(videoId: number): Promise<SubtitleSegment[]> {
+  const response = await fetch(`${API_BASE}/videos/${videoId}/subtitle/segments`);
+  const data = await response.json();
+  if (!data.success) throw new Error(data.error);
+  return data.data;
+}
+
+// 获取字幕覆盖范围
+export async function getSubtitleCoverage(videoId: number): Promise<SubtitleCoverage> {
+  const response = await fetch(`${API_BASE}/videos/${videoId}/subtitle/coverage`);
+  const data = await response.json();
+  if (!data.success) throw new Error(data.error);
+  return data.data;
 }

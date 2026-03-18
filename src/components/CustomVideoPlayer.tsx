@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, MouseEvent, ChangeEvent, forwardRef, useImperativeHandle } from 'react';
-import { updatePlayHistory, checkSpriteExists } from '../api';
+import { useState, useRef, useEffect, MouseEvent, ChangeEvent, forwardRef, useImperativeHandle, useCallback } from 'react';
+import { updatePlayHistory, checkSpriteExists, getSubtitleStatus, getSubtitleContent, generateSubtitle, cancelSubtitleGeneration, getWhisperConfig, startRealtimeSubtitle, getSubtitleSegments, SubtitleContent, WhisperConfig, RealtimeSubtitleEvent, SubtitleSegment } from '../api';
+import { useVideoSettings, WHISPER_LANGUAGES } from '../hooks/useVideoSettings';
 
 interface CustomVideoPlayerProps {
   src: string;
@@ -9,6 +10,7 @@ interface CustomVideoPlayerProps {
   title?: string;
   author?: string;
   initialProgress?: number;
+  startTime?: number;
   onPrev?: () => void;
   onNext?: () => void;
   onEnded?: () => void;
@@ -30,6 +32,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   title,
   author,
   initialProgress = 0,
+  startTime,
   onPrev,
   onNext,
   onEnded,
@@ -49,6 +52,9 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   const progressRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // 视频设置
+  const { settings, updateSettings } = useVideoSettings();
+  
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(durationSeconds || 0);
@@ -67,11 +73,27 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
   const [showEndCountdown, setShowEndCountdown] = useState(false);
   const [countdown, setCountdown] = useState(5);
   
+  // 字幕相关状态
+  const [subtitles, setSubtitles] = useState<SubtitleContent | null>(null);
+  const [subtitleStatus, setSubtitleStatus] = useState<{ exists: boolean; isGenerating: boolean }>({ exists: false, isGenerating: false });
+  const [showVideoSettings, setShowVideoSettings] = useState(false);
+  const [whisperConfig, setWhisperConfig] = useState<WhisperConfig | null>(null);
+  const [subtitleEnabled, setSubtitleEnabled] = useState(settings.autoShowSubtitle);
+  const [generatingMessage, setGeneratingMessage] = useState('');
+  
+  // 实时字幕相关状态
+  const [isRealtimeMode, setIsRealtimeMode] = useState(false);
+  const [realtimeSubtitles, setRealtimeSubtitles] = useState<Array<{ start: number; end: number; text: string }>>([]);
+  const [realtimeStatus, setRealtimeStatus] = useState<string>('');
+  const [savedSegments, setSavedSegments] = useState<SubtitleSegment[]>([]);
+  
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const volumeIndicatorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const seekIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const saveProgressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const stopRealtimeRef = useRef<(() => void) | null>(null);
+  const subtitleIdCounterRef = useRef(0);
   
   const frameCount = 20;
   const cols = 5;
@@ -82,14 +104,22 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
     const video = videoRef.current;
     if (!video) return;
 
-    const handleTimeUpdate = () => setCurrentTime(video.currentTime);
+    const handleTimeUpdate = () => {
+      setCurrentTime(video.currentTime);
+      // 发送时间更新事件
+      window.dispatchEvent(new CustomEvent('videoTimeUpdate', { detail: video.currentTime }));
+    };
     const handleLoadedMetadata = () => {
       if (!durationSeconds) {
         setDuration(video.duration);
       }
     };
     const handleCanPlay = () => {
-      if (!hasSetInitialProgress && initialProgress > 0) {
+      // 如果有 startTime 参数，优先使用
+      if (startTime !== undefined && startTime > 0 && !hasSetInitialProgress) {
+        video.currentTime = startTime;
+        setHasSetInitialProgress(true);
+      } else if (!hasSetInitialProgress && initialProgress > 0) {
         // 如果进度 >= 100%，从 0 开始播放
         if (initialProgress >= 100) {
           video.currentTime = 0;
@@ -97,6 +127,11 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
           video.currentTime = (initialProgress / 100) * (duration || video.duration || 0);
         }
         setHasSetInitialProgress(true);
+      }
+      
+      // 自动播放
+      if (settings.autoPlay) {
+        video.play().catch(() => {});
       }
     };
     const handlePlay = () => {
@@ -178,12 +213,64 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
       const progressPercent = (video.currentTime / (duration || 1)) * 100;
       updatePlayHistory(videoId, progressPercent).catch(console.error);
     };
-  }, [durationSeconds, videoId, initialProgress, hasSetInitialProgress, hasNext, onEnded]);
+  }, [durationSeconds, videoId, initialProgress, startTime, hasSetInitialProgress, hasNext, onEnded, settings.autoPlay]);
 
   // 检查精灵图是否存在
   useEffect(() => {
     checkSpriteExists(videoId).then(exists => setSpriteAvailable(exists));
   }, [videoId]);
+
+  // 加载字幕状态、内容和已保存的字幕片段
+  useEffect(() => {
+    const loadSubtitleData = async () => {
+      try {
+        const status = await getSubtitleStatus(videoId);
+        setSubtitleStatus({ exists: status.exists, isGenerating: status.isGenerating });
+        
+        if (status.exists) {
+          const content = await getSubtitleContent(videoId);
+          setSubtitles(content);
+        }
+        
+        // 加载已保存的字幕片段
+        const segments = await getSubtitleSegments(videoId);
+        setSavedSegments(segments);
+        console.log(`[字幕] 加载了 ${segments.length} 条已保存的字幕片段`);
+      } catch (error) {
+        console.error('加载字幕状态失败:', error);
+      }
+    };
+    
+    loadSubtitleData();
+  }, [videoId]);
+
+  // 加载 Whisper 配置
+  useEffect(() => {
+    getWhisperConfig().then(setWhisperConfig).catch(console.error);
+  }, []);
+
+  // 轮询字幕生成状态
+  useEffect(() => {
+    if (!subtitleStatus.isGenerating) return;
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        const status = await getSubtitleStatus(videoId);
+        setSubtitleStatus({ exists: status.exists, isGenerating: status.isGenerating });
+        
+        if (status.exists && !subtitleStatus.exists) {
+          const content = await getSubtitleContent(videoId);
+          setSubtitles(content);
+          setGeneratingMessage('字幕生成完成！');
+          setTimeout(() => setGeneratingMessage(''), 3000);
+        }
+      } catch (error) {
+        console.error('轮询字幕状态失败:', error);
+      }
+    }, 2000);
+    
+    return () => clearInterval(pollInterval);
+  }, [videoId, subtitleStatus.isGenerating, subtitleStatus.exists]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -365,6 +452,196 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  // 处理生成字幕
+  const handleGenerateSubtitle = useCallback(async () => {
+    if (!whisperConfig?.bestEngine) {
+      return;
+    }
+    
+    try {
+      setGeneratingMessage('正在启动字幕生成...');
+      await generateSubtitle(videoId, { 
+        model: settings.model || undefined, 
+        language: settings.language 
+      });
+      setSubtitleStatus(prev => ({ ...prev, isGenerating: true }));
+      setGeneratingMessage('字幕生成中，请稍候...');
+    } catch (error: any) {
+      console.error('启动字幕生成失败:', error);
+      setGeneratingMessage('');
+    }
+  }, [videoId, whisperConfig, settings.model, settings.language]);
+
+  // 处理取消生成
+  const handleCancelGenerate = async () => {
+    try {
+      await cancelSubtitleGeneration(videoId);
+      setSubtitleStatus(prev => ({ ...prev, isGenerating: false }));
+      setGeneratingMessage('');
+    } catch (error) {
+      console.error('取消生成失败:', error);
+    }
+  };
+
+  // 启动实时字幕模式
+  const handleStartRealtime = useCallback(() => {
+    if (!whisperConfig?.bestEngine) {
+      return;
+    }
+
+    // 获取当前播放时间
+    const currentTime = videoRef.current?.currentTime || 0;
+    console.log(`[实时字幕] 从 ${currentTime.toFixed(2)} 秒开始生成`);
+
+    setIsRealtimeMode(true);
+    setRealtimeSubtitles([]);
+    setRealtimeStatus('正在提取音频...');
+    setGeneratingMessage('实时字幕模式已启动');
+
+    stopRealtimeRef.current = startRealtimeSubtitle(
+      videoId,
+      (event: RealtimeSubtitleEvent) => {
+        console.log('[实时字幕] 收到事件:', event);
+        if (event.type === 'status') {
+          setRealtimeStatus(event.message || '');
+        } else if (event.type === 'subtitle') {
+          console.log('[实时字幕] 添加字幕:', event.start, event.end, event.text);
+          const newSubtitle = {
+            start: event.start!,
+            end: event.end!,
+            text: event.text!
+          };
+          setRealtimeSubtitles(prev => {
+            const newSubtitles = [...prev, newSubtitle];
+            console.log('[实时字幕] 当前字幕数量:', newSubtitles.length);
+            return newSubtitles;
+          });
+          // 同时更新已保存的字幕片段，让字幕列表实时显示
+          setSavedSegments(prev => {
+            subtitleIdCounterRef.current += 1;
+            const newSegment: SubtitleSegment = {
+              id: subtitleIdCounterRef.current,
+              startTime: event.start!,
+              endTime: event.end!,
+              text: event.text!,
+              language: 'auto',
+              model: 'whisper'
+            };
+            return [...prev, newSegment].sort((a, b) => a.startTime - b.startTime);
+          });
+          // 触发自定义事件，通知 VideoDetail 更新字幕列表
+          window.dispatchEvent(new CustomEvent('subtitleGenerated', {
+            detail: {
+              startTime: event.start,
+              endTime: event.end,
+              text: event.text
+            }
+          }));
+        } else if (event.type === 'complete') {
+          setRealtimeStatus(`字幕生成完成，已保存 ${event.savedSegments || 0} 条`);
+          setGeneratingMessage('');
+          // 重新加载已保存的字幕片段
+          getSubtitleSegments(videoId).then(segments => {
+            setSavedSegments(segments);
+            console.log(`[字幕] 重新加载了 ${segments.length} 条字幕片段`);
+          });
+          setTimeout(() => {
+            setIsRealtimeMode(false);
+            setRealtimeStatus('');
+            setRealtimeSubtitles([]);
+          }, 2000);
+        } else if (event.type === 'error') {
+          console.error('[实时字幕] 错误:', event.error);
+          setIsRealtimeMode(false);
+          setGeneratingMessage('');
+        }
+      },
+      (error) => {
+        console.error('[实时字幕] 连接错误:', error.message);
+        setIsRealtimeMode(false);
+        setGeneratingMessage('');
+      },
+      currentTime,
+      { language: settings.language, model: settings.model || undefined }
+    );
+  }, [videoId, whisperConfig, settings.language, settings.model]);
+
+  // 自动字幕逻辑
+  useEffect(() => {
+    if (!whisperConfig?.bestEngine || isRealtimeMode || subtitleStatus.isGenerating) return;
+    
+    // 自动实时字幕
+    if (settings.autoRealtimeSubtitle && !subtitleStatus.exists && savedSegments.length === 0) {
+      console.log('[自动字幕] 启动实时字幕');
+      handleStartRealtime();
+    }
+    // 自动生成完整字幕
+    else if (settings.autoGenerateSubtitle && !subtitleStatus.exists && savedSegments.length === 0) {
+      console.log('[自动字幕] 启动完整字幕生成');
+      handleGenerateSubtitle();
+    }
+  }, [videoId, whisperConfig, settings.autoRealtimeSubtitle, settings.autoGenerateSubtitle, subtitleStatus.exists, savedSegments.length, handleStartRealtime, handleGenerateSubtitle]);
+
+  // 停止实时字幕模式
+  const handleStopRealtime = () => {
+    if (stopRealtimeRef.current) {
+      stopRealtimeRef.current();
+      stopRealtimeRef.current = null;
+    }
+    setIsRealtimeMode(false);
+    setGeneratingMessage('');
+  };
+
+  // 获取当前时间对应的字幕（支持普通模式、实时模式和已保存字幕片段）
+  const getCurrentSubtitleText = useCallback(() => {
+    if (!subtitleEnabled) return null;
+
+    // 实时模式：优先显示新生成的字幕，然后是已保存的字幕片段
+    if (isRealtimeMode) {
+      // 先检查新生成的字幕
+      if (realtimeSubtitles.length > 0) {
+        const currentSub = realtimeSubtitles.find(
+          sub => currentTime >= sub.start && currentTime <= sub.end
+        );
+        if (currentSub) {
+          return currentSub.text;
+        }
+      }
+      // 再检查已保存的字幕片段
+      if (savedSegments.length > 0) {
+        const currentSub = savedSegments.find(
+          sub => currentTime >= sub.startTime && currentTime <= sub.endTime
+        );
+        if (currentSub) {
+          return currentSub.text;
+        }
+      }
+      return null;
+    }
+
+    // 普通模式：优先使用 SRT 文件，其次使用已保存的字幕片段
+    if (subtitles) {
+      const currentSub = subtitles.subtitles.find(
+        sub => currentTime >= sub.start && currentTime <= sub.end
+      );
+      if (currentSub) {
+        return currentSub.text;
+      }
+    }
+    
+    // 如果没有 SRT 文件，使用已保存的字幕片段
+    if (savedSegments.length > 0) {
+      const currentSub = savedSegments.find(
+        sub => currentTime >= sub.startTime && currentTime <= sub.endTime
+      );
+      if (currentSub) {
+        return currentSub.text;
+      }
+    }
+
+    return null;
+  }, [subtitles, subtitleEnabled, currentTime, isRealtimeMode, realtimeSubtitles, savedSegments]);
+
   const handlePlayPause = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -383,7 +660,80 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
 
     const rect = progress.getBoundingClientRect();
     const percentage = (e.clientX - rect.left) / rect.width;
-    video.currentTime = Math.max(0, Math.min(1, percentage)) * duration;
+    const newTime = Math.max(0, Math.min(1, percentage)) * duration;
+    video.currentTime = newTime;
+    
+    // 如果实时字幕模式正在运行，重新启动从新位置开始
+    if (isRealtimeMode) {
+      console.log(`[实时字幕] 检测到进度跳转，从 ${newTime.toFixed(2)} 秒重新开始生成`);
+      
+      // 先停止旧的连接
+      if (stopRealtimeRef.current) {
+        stopRealtimeRef.current();
+        stopRealtimeRef.current = null;
+      }
+      
+      setRealtimeSubtitles([]);
+      setRealtimeStatus('正在提取音频...');
+      
+      // 等待一小段时间让服务端清理完成
+      setTimeout(() => {
+        // 重新启动实时字幕
+        stopRealtimeRef.current = startRealtimeSubtitle(
+          videoId,
+          (event: RealtimeSubtitleEvent) => {
+            if (event.type === 'status') {
+              setRealtimeStatus(event.message || '');
+            } else if (event.type === 'subtitle') {
+              const newSubtitle = {
+                start: event.start!,
+                end: event.end!,
+                text: event.text!
+              };
+              setRealtimeSubtitles(prev => [...prev, newSubtitle]);
+              setSavedSegments(prev => {
+                subtitleIdCounterRef.current += 1;
+                const newSegment: SubtitleSegment = {
+                  id: subtitleIdCounterRef.current,
+                  startTime: event.start!,
+                  endTime: event.end!,
+                  text: event.text!,
+                  language: 'auto',
+                  model: 'whisper'
+                };
+                return [...prev, newSegment].sort((a, b) => a.startTime - b.startTime);
+              });
+              window.dispatchEvent(new CustomEvent('subtitleGenerated', {
+                detail: { startTime: event.start, endTime: event.end, text: event.text }
+              }));
+            } else if (event.type === 'complete') {
+              setRealtimeStatus(`字幕生成完成，已保存 ${event.savedSegments || 0} 条`);
+              setGeneratingMessage('');
+              getSubtitleSegments(videoId).then(segments => setSavedSegments(segments));
+              setTimeout(() => {
+                setIsRealtimeMode(false);
+                setRealtimeStatus('');
+                setRealtimeSubtitles([]);
+              }, 2000);
+            } else if (event.type === 'error') {
+              console.error('[实时字幕] 错误:', event.error);
+              // 如果是取消错误，不显示（这是正常的跳转行为）
+              if (event.error !== '已取消') {
+                setRealtimeStatus(`错误: ${event.error || '实时字幕生成失败'}`);
+              }
+            }
+          },
+          (error) => {
+            console.error('[实时字幕] 连接错误:', error.message);
+            // 忽略取消相关的错误
+            if (!error.message.includes('取消')) {
+              setRealtimeStatus(`连接错误: ${error.message}`);
+            }
+          },
+          newTime
+        );
+      }, 500);
+    }
   };
 
   const handleProgressMouseMove = (e: MouseEvent<HTMLDivElement>) => {
@@ -438,7 +788,7 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current);
     }
-    if (isPlaying) {
+    if (isPlaying && !showVideoSettings) {
       controlsTimeoutRef.current = setTimeout(() => {
         setShowControls(false);
       }, 3000);
@@ -473,10 +823,22 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
         className="w-full h-full object-contain"
         src={src}
         poster={poster}
-        autoPlay
+        playsInline
         onClick={handlePlayPause}
         onDoubleClick={toggleFullscreen}
       />
+
+      {/* 字幕显示区域 */}
+      {subtitleEnabled && getCurrentSubtitleText() && (
+        <div className="absolute bottom-20 left-0 right-0 flex justify-center pointer-events-none z-20">
+          <div 
+            className="bg-black/70 text-white px-4 py-2 rounded max-w-[80%] text-center"
+            style={{ fontSize: isFullscreen ? '1.5rem' : '1rem' }}
+          >
+            {getCurrentSubtitleText()}
+          </div>
+        </div>
+      )}
 
       {/* 音量指示器 */}
       {showVolumeIndicator && (
@@ -693,6 +1055,164 @@ const CustomVideoPlayer = forwardRef<CustomVideoPlayerRef, CustomVideoPlayerProp
                             width: '4px'
                           }}
                         />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 字幕显示开关按钮 */}
+                <button
+                  onClick={() => setSubtitleEnabled(!subtitleEnabled)}
+                  className={`w-10 h-10 flex items-center justify-center transition-colors ${
+                    (subtitleStatus.exists || isRealtimeMode || savedSegments.length > 0) && subtitleEnabled ? 'text-primary' : 'text-white hover:text-primary'
+                  }`}
+                  title={subtitleEnabled ? '关闭字幕' : '开启字幕'}
+                >
+                  <span className="material-symbols-outlined text-xl">
+                    {(subtitleStatus.exists || isRealtimeMode || savedSegments.length > 0) && subtitleEnabled ? 'subtitles' : 'subtitles_off'}
+                  </span>
+                </button>
+
+                {/* 视频设置按钮 */}
+                <div 
+                  className="relative"
+                  onMouseEnter={() => setShowVideoSettings(true)}
+                  onMouseLeave={() => setShowVideoSettings(false)}
+                >
+                  <div
+                    className={`w-10 h-10 flex items-center justify-center transition-colors cursor-default ${
+                      isRealtimeMode ? 'text-green-400' : 'text-white'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-xl">
+                      settings
+                    </span>
+                    {isRealtimeMode && (
+                      <div className="absolute -top-1 -right-1 w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                    )}
+                  </div>
+                  
+                  {/* 视频设置面板 */}
+                  {showVideoSettings && (
+                    <div className="absolute bottom-full right-0 pb-2 w-64">
+                      <div className="bg-white rounded-lg p-3 shadow-xl space-y-3">
+                        <div className="text-sm font-medium text-slate-700 border-b pb-2">视频设置</div>
+                        
+                        {/* 语言选择 */}
+                        <div className="space-y-1">
+                          <label className="text-xs text-slate-500">首选语言</label>
+                          <select
+                            value={settings.language}
+                            onChange={(e) => updateSettings({ language: e.target.value })}
+                            className="w-full text-sm border rounded px-2 py-1 bg-white"
+                          >
+                            {WHISPER_LANGUAGES.map(lang => (
+                              <option key={lang.code} value={lang.code}>{lang.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        
+                        {/* 模型选择 */}
+                        <div className="space-y-1">
+                          <label className="text-xs text-slate-500">Whisper 模型</label>
+                          <select
+                            value={settings.model}
+                            onChange={(e) => updateSettings({ model: e.target.value })}
+                            className="w-full text-sm border rounded px-2 py-1 bg-white"
+                          >
+                            <option value="">默认模型</option>
+                            {whisperConfig?.models.map(model => (
+                              <option key={model.path} value={model.path}>{model.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        
+                        {/* 开关选项 */}
+                        <div className="space-y-2 pt-2 border-t">
+                          <label className="flex items-center justify-between text-sm">
+                            <span className="text-slate-600">自动播放</span>
+                            <input
+                              type="checkbox"
+                              checked={settings.autoPlay}
+                              onChange={(e) => updateSettings({ autoPlay: e.target.checked })}
+                              className="w-4 h-4"
+                            />
+                          </label>
+                          
+                          <label className="flex items-center justify-between text-sm">
+                            <span className="text-slate-600">显示字幕</span>
+                            <input
+                              type="checkbox"
+                              checked={settings.autoShowSubtitle}
+                              onChange={(e) => {
+                                updateSettings({ autoShowSubtitle: e.target.checked });
+                                setSubtitleEnabled(e.target.checked);
+                              }}
+                              className="w-4 h-4"
+                            />
+                          </label>
+                          
+                          <label className="flex items-center justify-between text-sm">
+                            <span className="text-slate-600">自动实时字幕</span>
+                            <input
+                              type="checkbox"
+                              checked={settings.autoRealtimeSubtitle}
+                              onChange={(e) => updateSettings({ autoRealtimeSubtitle: e.target.checked })}
+                              className="w-4 h-4"
+                            />
+                          </label>
+                          
+                          <label className="flex items-center justify-between text-sm">
+                            <span className="text-slate-600">自动生成字幕</span>
+                            <input
+                              type="checkbox"
+                              checked={settings.autoGenerateSubtitle}
+                              onChange={(e) => updateSettings({ autoGenerateSubtitle: e.target.checked })}
+                              className="w-4 h-4"
+                            />
+                          </label>
+                        </div>
+                        
+                        {/* 实时模式运行中 */}
+                        {isRealtimeMode && (
+                          <div className="space-y-2 pt-2 border-t">
+                            <div className="flex items-center gap-2 text-green-600 text-sm">
+                              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                              实时字幕运行中
+                            </div>
+                            <div className="text-slate-500 text-xs">
+                              已生成 {realtimeSubtitles.length} 条
+                            </div>
+                            <button
+                              onClick={handleStopRealtime}
+                              className="w-full bg-red-50 text-red-500 text-sm py-1.5 rounded hover:bg-red-100 transition-colors"
+                            >
+                              停止
+                            </button>
+                          </div>
+                        )}
+                        
+                        {/* 普通模式生成中 */}
+                        {subtitleStatus.isGenerating && !isRealtimeMode && (
+                          <div className="space-y-2 pt-2 border-t">
+                            <div className="text-slate-700 text-sm">正在生成字幕...</div>
+                            <div className="w-full bg-slate-200 rounded-full h-1">
+                              <div className="bg-primary h-1 rounded-full animate-pulse w-1/2" />
+                            </div>
+                            <button
+                              onClick={handleCancelGenerate}
+                              className="text-red-500 text-xs hover:text-red-600"
+                            >
+                              取消
+                            </button>
+                          </div>
+                        )}
+                        
+                        {!whisperConfig?.bestEngine && (
+                          <div className="text-slate-500 text-xs text-center pt-2 border-t">
+                            未找到 Whisper 引擎
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

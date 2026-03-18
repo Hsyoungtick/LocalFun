@@ -1,4 +1,4 @@
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   getVideoDetail, 
@@ -14,10 +14,16 @@ import {
   likeVideo,
   toggleFavorite,
   getCategories,
+  getAuthors,
   Category,
+  Author,
   openVideoFile,
   updateVideo,
-  renameVideo
+  renameVideo,
+  getSubtitleSegments,
+  SubtitleSegment,
+  updateAuthor,
+  createAuthor
 } from '../api';
 import CustomVideoPlayer, { CustomVideoPlayerRef } from './CustomVideoPlayer';
 import VideoCard from './VideoCard';
@@ -25,9 +31,12 @@ import VideoCard from './VideoCard';
 export default function VideoDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const startTimeFromUrl = searchParams.get('t') ? parseInt(searchParams.get('t')!) : undefined;
   const [video, setVideo] = useState<VideoDetailType | null>(null);
   const [sameCategoryVideos, setSameCategoryVideos] = useState<Video[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [subtitleSegments, setSubtitleSegments] = useState<SubtitleSegment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState('created_at');
@@ -44,10 +53,24 @@ export default function VideoDetail() {
   const [description, setDescription] = useState('');
   const [showEditTitleDialog, setShowEditTitleDialog] = useState(false);
   const [editingTitle, setEditingTitle] = useState('');
+  const [showAuthorDropdown, setShowAuthorDropdown] = useState(false);
+  const [authors, setAuthors] = useState<Author[]>([]);
+  const [newAuthorName, setNewAuthorName] = useState('');
+  const authorDropdownRef = useRef<HTMLDivElement>(null);
+
+  // 格式化时间（秒 -> MM:SS）
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
   const [isTitleOverflow, setIsTitleOverflow] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const videoPlayerRef = useRef<CustomVideoPlayerRef>(null);
   const playlistContainerRef = useRef<HTMLDivElement>(null);
+  const subtitleListRef = useRef<HTMLDivElement>(null);
+  const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0);
+  const subtitleIdCounterRef = useRef(0);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
 
   const showToast = (message: string, type: 'success' | 'info' = 'success') => {
@@ -63,12 +86,16 @@ export default function VideoDetail() {
     
     Promise.all([
       getVideoDetail(parseInt(id)),
-      getCategories()
-    ]).then(([videoData, categoriesData]) => {
+      getCategories(),
+      getAuthors(),
+      getSubtitleSegments(parseInt(id))
+    ]).then(([videoData, categoriesData, authorsData, segmentsData]) => {
       setVideo(videoData);
       setDescription(videoData.description || '');
       setCategories(categoriesData);
+      setAuthors(authorsData);
       setSelectedCategory(videoData.category);
+      setSubtitleSegments(segmentsData);
     })
     .catch((err) => {
       setError(err.message);
@@ -76,12 +103,85 @@ export default function VideoDetail() {
     .finally(() => setLoading(false));
   }, [id]);
 
+  // 监听实时字幕生成事件
+  useEffect(() => {
+    const handleSubtitleGenerated = (e: CustomEvent) => {
+      const { startTime, endTime, text } = e.detail;
+      setSubtitleSegments(prev => {
+        subtitleIdCounterRef.current += 1;
+        const newSegment: SubtitleSegment = {
+          id: subtitleIdCounterRef.current,
+          startTime,
+          endTime,
+          text,
+          language: 'auto',
+          model: 'whisper'
+        };
+        return [...prev, newSegment].sort((a, b) => a.startTime - b.startTime);
+      });
+    };
+
+    window.addEventListener('subtitleGenerated', handleSubtitleGenerated as EventListener);
+    return () => {
+      window.removeEventListener('subtitleGenerated', handleSubtitleGenerated as EventListener);
+    };
+  }, []);
+
+  // 监听视频播放时间更新
+  useEffect(() => {
+    const handleTimeUpdate = (e: CustomEvent) => {
+      setCurrentPlaybackTime(e.detail);
+    };
+    window.addEventListener('videoTimeUpdate', handleTimeUpdate as EventListener);
+    return () => {
+      window.removeEventListener('videoTimeUpdate', handleTimeUpdate as EventListener);
+    };
+  }, []);
+
+  // 点击外部关闭作者下拉菜单
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (authorDropdownRef.current && !authorDropdownRef.current.contains(e.target as Node)) {
+        setShowAuthorDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // 定位到当前播放时间的字幕
+  const scrollToCurrentSubtitle = () => {
+    if (!subtitleListRef.current || subtitleSegments.length === 0) return;
+    
+    const currentIndex = subtitleSegments.findIndex(
+      seg => currentPlaybackTime >= seg.startTime && currentPlaybackTime <= seg.endTime
+    );
+    
+    if (currentIndex >= 0) {
+      const container = subtitleListRef.current;
+      const items = container.querySelectorAll('.subtitle-item');
+      if (items[currentIndex]) {
+        items[currentIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
+
+  // 跳转到指定时间的字幕
+  const seekToSubtitle = (startTime: number) => {
+    window.dispatchEvent(new CustomEvent('seekTo', { detail: startTime }));
+  };
+
   useEffect(() => {
     if (!id) return;
     
     getSameCategoryVideos(parseInt(id), { sort: sortBy, order: sortOrder, limit: 20 })
       .then(setSameCategoryVideos)
-      .catch(console.error);
+      .catch((error) => {
+        // 忽略请求取消错误
+        if (!error?.message?.includes('abort')) {
+          console.error(error);
+        }
+      });
   }, [id, sortBy, sortOrder]);
 
   // 定期刷新播放列表以更新上次播放时间
@@ -91,7 +191,12 @@ export default function VideoDetail() {
     const interval = setInterval(() => {
       getSameCategoryVideos(parseInt(id), { sort: sortBy, order: sortOrder, limit: 20 })
         .then(setSameCategoryVideos)
-        .catch(console.error);
+        .catch((error) => {
+          // 忽略请求取消错误
+          if (!error?.message?.includes('abort')) {
+            console.error(error);
+          }
+        });
     }, 10000); // 每10秒刷新一次
 
     // 页面可见性变化时刷新
@@ -99,7 +204,12 @@ export default function VideoDetail() {
       if (document.visibilityState === 'visible') {
         getSameCategoryVideos(parseInt(id), { sort: sortBy, order: sortOrder, limit: 20 })
           .then(setSameCategoryVideos)
-          .catch(console.error);
+          .catch((error) => {
+            // 忽略请求取消错误
+            if (!error?.message?.includes('abort')) {
+              console.error(error);
+            }
+          });
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -147,7 +257,10 @@ export default function VideoDetail() {
     addFavoriteFrame(parseInt(id), timeSeconds)
       .then(() => getVideoDetail(parseInt(id)))
       .then(setVideo)
-      .then(() => showToast('已添加喜欢的帧', 'success'))
+      .then(() => {
+        showToast('已添加喜欢的帧', 'success');
+        window.dispatchEvent(new CustomEvent('favoriteFramesUpdated'));
+      })
       .catch(console.error);
   }, [id, video]);
 
@@ -158,13 +271,19 @@ export default function VideoDetail() {
       updateFavoriteFrameNote(parseInt(id), editingFrameId, frameNote || undefined)
         .then(() => getVideoDetail(parseInt(id)))
         .then(setVideo)
-        .then(() => setShowAddFrameDialog(false))
+        .then(() => {
+          setShowAddFrameDialog(false);
+          window.dispatchEvent(new CustomEvent('favoriteFramesUpdated'));
+        })
         .catch(console.error);
     } else {
       addFavoriteFrame(parseInt(id), tempTimeSeconds, frameNote || undefined)
         .then(() => getVideoDetail(parseInt(id)))
         .then(setVideo)
-        .then(() => setShowAddFrameDialog(false))
+        .then(() => {
+          setShowAddFrameDialog(false);
+          window.dispatchEvent(new CustomEvent('favoriteFramesUpdated'));
+        })
         .catch(console.error);
     }
   }, [id, video, tempTimeSeconds, frameNote, editingFrameId]);
@@ -184,6 +303,9 @@ export default function VideoDetail() {
         return getVideoDetail(parseInt(id));
       })
       .then(setVideo)
+      .then(() => {
+        window.dispatchEvent(new CustomEvent('favoriteFramesUpdated'));
+      })
       .catch(console.error);
   }, [id]);
 
@@ -380,6 +502,78 @@ export default function VideoDetail() {
                 <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{authorDescription}</p>
               )}
             </div>
+            <div className="relative" ref={authorDropdownRef}>
+              <button
+                onClick={() => setShowAuthorDropdown(!showAuthorDropdown)}
+                className="text-slate-500 hover:text-primary transition-colors shrink-0"
+                title="修改作者"
+              >
+                <span className="material-symbols-outlined text-xl">edit</span>
+              </button>
+              {showAuthorDropdown && (
+                <div className="absolute right-0 top-full mt-2 z-50 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 py-1 min-w-[200px] max-h-[300px] overflow-y-auto">
+                  <div className="px-3 py-2 text-xs text-slate-500 border-b border-slate-200 dark:border-slate-700">
+                    选择作者
+                  </div>
+                  <div className="p-2 border-b border-slate-200 dark:border-slate-700">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="新建作者..."
+                        value={newAuthorName}
+                        onChange={(e) => setNewAuthorName(e.target.value)}
+                        className="flex-1 px-2 py-1 text-sm bg-slate-100 dark:bg-slate-700 rounded border-none outline-none text-slate-900 dark:text-slate-100"
+                        autoFocus
+                      />
+                      <button
+                        onClick={async () => {
+                          if (!newAuthorName.trim()) return;
+                          try {
+                            const newAuthor = await createAuthor({ name: newAuthorName.trim() });
+                            await updateVideo(video!.id, { author_id: newAuthor.id });
+                            const detail = await getVideoDetail(video!.id);
+                            setVideo(detail);
+                            setNewAuthorName('');
+                            setShowAuthorDropdown(false);
+                            showToast('作者已更新');
+                          } catch (error: any) {
+                            showToast(error.message || '更新失败');
+                          }
+                        }}
+                        disabled={!newAuthorName.trim()}
+                        className="px-2 py-1 text-sm bg-primary text-white rounded disabled:opacity-50"
+                      >
+                        确定
+                      </button>
+                    </div>
+                  </div>
+                  {authors.length === 0 && (
+                    <div className="px-4 py-2 text-sm text-slate-500">暂无作者</div>
+                  )}
+                  {authors.map((author) => (
+                    <button
+                      key={author.id}
+                      onClick={async () => {
+                        try {
+                          await updateVideo(video!.id, { author_id: author.id });
+                          const detail = await getVideoDetail(video!.id);
+                          setVideo(detail);
+                          setShowAuthorDropdown(false);
+                          showToast('作者已更新');
+                        } catch (error: any) {
+                          showToast(error.message || '更新失败');
+                        }
+                      }}
+                      className={`w-full px-4 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors ${
+                        author.name === authorName ? 'text-primary font-medium' : 'text-slate-900 dark:text-slate-100'
+                      }`}
+                    >
+                      {author.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -401,6 +595,7 @@ export default function VideoDetail() {
               title={video.title}
               author={authorName}
               initialProgress={video.playProgress || 0}
+              startTime={startTimeFromUrl}
               onPrev={handlePrev}
               onNext={handleNext}
               onEnded={handleNext}
@@ -424,18 +619,6 @@ export default function VideoDetail() {
                 {video.favoriteFramesCount > 0 && (
                   <span className="text-base font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500 ml-1">
                     {video.favoriteFramesCount}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={handleLike}
-                className="flex items-center justify-center w-21 h-15 rounded-lg transition-all group"
-              >
-                <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-pink-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>favorite</span>
-                {video.likeCount > 0 && (
-                  <span className="text-base font-bold text-slate-600 dark:text-slate-400 group-hover:text-pink-500 ml-1">
-                    {video.likeCount}
                   </span>
                 )}
               </button>
@@ -481,17 +664,6 @@ export default function VideoDetail() {
                 )}
               </div>
             </div>
-
-            <button
-              onClick={() => {
-                if (window.confirm('确定要重置该视频的所有数据吗？这将清除播放量、喜欢的帧、喜欢数和收藏状态。')) {
-                  handleResetVideoData();
-                }
-              }}
-              className="flex items-center justify-center w-21 h-15 rounded-lg transition-all group"
-            >
-              <span className="material-symbols-outlined text-slate-600 dark:text-slate-400 transition-colors group-hover:text-red-500" style={{ fontVariationSettings: "'FILL' 1", fontSize: '1.875rem' }}>restart_alt</span>
-            </button>
           </div>
         </div>
 
@@ -561,8 +733,79 @@ export default function VideoDetail() {
                   )}
                 </div>
               ) : activeTab === 'subtitles' ? (
-                <div className="text-sm text-slate-400 text-center py-4 flex items-center justify-center h-full w-full">
-                  暂无字幕
+                <div className="space-y-2 w-full min-w-0 overflow-y-auto">
+                  {/* SRT 字幕文件 */}
+                  {video.subtitles.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-xs text-slate-500 mb-2">字幕文件</div>
+                      {video.subtitles.map((subtitle) => (
+                        <div key={subtitle.id} className="bg-white/5 rounded-lg p-3 hover:bg-white/10 transition-colors">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-primary text-lg">subtitles</span>
+                              <span className="text-white text-sm font-medium">
+                                {subtitle.language === 'auto' ? '自动检测' : subtitle.language}
+                              </span>
+                              <span className="text-slate-500 text-xs">•</span>
+                              <span className="text-slate-400 text-xs">{subtitle.model}</span>
+                            </div>
+                            <span className="text-slate-500 text-xs">
+                              {new Date(subtitle.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-slate-400 text-xs truncate">
+                            {subtitle.srtPath}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {/* 数据库中的字幕片段 */}
+                  {subtitleSegments.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-xs text-slate-500">
+                          已生成字幕片段 ({subtitleSegments.length} 条)
+                        </div>
+                        <button
+                          onClick={scrollToCurrentSubtitle}
+                          className="text-xs text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
+                          title="定位到当前播放时间"
+                        >
+                          <span className="material-symbols-outlined text-sm">my_location</span>
+                          定位当前
+                        </button>
+                      </div>
+                      <div ref={subtitleListRef} className="h-64 overflow-y-auto space-y-1 overflow-x-hidden">
+                        {subtitleSegments.map((segment) => {
+                          const isCurrent = currentPlaybackTime >= segment.startTime && currentPlaybackTime <= segment.endTime;
+                          return (
+                            <div 
+                              key={segment.id} 
+                              className={`subtitle-item rounded px-3 py-2 text-sm cursor-pointer transition-colors ${
+                                isCurrent 
+                                  ? 'bg-primary/30 border border-primary/50' 
+                                  : 'bg-white/5 hover:bg-white/10'
+                              }`}
+                              onClick={() => seekToSubtitle(segment.startTime)}
+                            >
+                              <span className={`text-sm ${isCurrent ? 'text-primary font-medium' : 'text-black'}`}>
+                                {segment.text}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* 无字幕 */}
+                  {video.subtitles.length === 0 && subtitleSegments.length === 0 && (
+                    <div className="text-sm text-slate-400 text-center py-4 flex items-center justify-center h-full w-full">
+                      暂无字幕
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-3 w-full">

@@ -22,6 +22,18 @@ if (!fs.existsSync(previewsDir)) {
   fs.mkdirSync(previewsDir, { recursive: true });
 }
 
+// 确保subtitles目录存在
+const subtitlesDir = path.join(dataDir, 'subtitles');
+if (!fs.existsSync(subtitlesDir)) {
+  fs.mkdirSync(subtitlesDir, { recursive: true });
+}
+
+// 确保whisper目录存在
+const whisperDir = path.join(process.cwd(), 'whisper');
+if (!fs.existsSync(whisperDir)) {
+  fs.mkdirSync(whisperDir, { recursive: true });
+}
+
 // 获取当前数据库实例
 export function getDb(): Database.Database {
   return db;
@@ -136,6 +148,45 @@ export async function initDatabase() {
       FOREIGN KEY (path_id) REFERENCES video_paths(id),
       UNIQUE(path_id)
     )
+  `);
+
+  // 创建字幕表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS subtitles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id INTEGER NOT NULL,
+      language TEXT DEFAULT 'auto',
+      model TEXT DEFAULT 'base',
+      status TEXT DEFAULT 'pending',
+      srt_path TEXT,
+      progress INTEGER DEFAULT 0,
+      error_message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (video_id) REFERENCES videos(id),
+      UNIQUE(video_id)
+    )
+  `);
+
+  // 创建字幕片段表（用于渐进式字幕）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS subtitle_segments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id INTEGER NOT NULL,
+      start_time REAL NOT NULL,
+      end_time REAL NOT NULL,
+      text TEXT NOT NULL,
+      language TEXT DEFAULT 'auto',
+      model TEXT DEFAULT 'base',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (video_id) REFERENCES videos(id)
+    )
+  `);
+
+  // 创建索引加速查询
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_subtitle_segments_video_time 
+    ON subtitle_segments(video_id, start_time, end_time)
   `);
 
   // 不再插入默认分类，只在扫描视频时根据需要创建分类
